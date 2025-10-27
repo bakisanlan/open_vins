@@ -83,7 +83,9 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
     }
   }
   double oldest_time = newest_cam_time - params.init_window_time - 0.10;
-  if (newest_cam_time < 0 || oldest_time < 0) {
+  if ((newest_cam_time < 0 || oldest_time < 0) && params.init_zupt_max_disparity != 0) {
+    PRINT_DEBUG(YELLOW "[init]: CHECK2" RESET);
+
     return false;
   }
 
@@ -97,9 +99,10 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
 
   // Compute the disparity of the system at the current timestep
   // If disparity is zero or negative we will always use the static initializer
+  // Skip disparity check entirely if zupt_max_disparity is exactly 0
   bool disparity_detected_moving_1to0 = false;
   bool disparity_detected_moving_2to1 = false;
-  if (params.init_max_disparity > 0) {
+  if (params.init_max_disparity > 0 && params.init_zupt_max_disparity != 0) {
 
     // Get the disparity statistics from this image to the previous
     // Only compute the disparity for the oldest half of the initialization period
@@ -122,6 +125,8 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
     PRINT_INFO(YELLOW "[init]: disparity is %.3f,%.3f (%.2f thresh)\n" RESET, avg_disp0, avg_disp1, params.init_max_disparity);
     disparity_detected_moving_1to0 = (avg_disp0 > params.init_max_disparity);
     disparity_detected_moving_2to1 = (avg_disp1 > params.init_max_disparity);
+  } else if (params.init_zupt_max_disparity == 0) {
+    PRINT_DEBUG(YELLOW "[init]: skipping disparity check because of ZUPT, (init_zupt_max_disparity == 0)\n" RESET);
   }
 
   // Use our static initializer!
