@@ -69,6 +69,9 @@ struct InertialInitializerOptions {
   /// Max disparity we will consider the unit to be stationary
   double init_max_disparity = 1.0;
 
+  /// Max disparity for ZUPT (passed from VioManager, used to skip disparity check when 0)
+  double init_zupt_max_disparity = 1.0;
+
   /// Number of features we should try to track
   int init_max_features = 50;
 
@@ -146,10 +149,13 @@ struct InertialInitializerOptions {
       parser->parse_config("init_dyn_bias_a", bias_a);
       init_dyn_bias_g << bias_g.at(0), bias_g.at(1), bias_g.at(2);
       init_dyn_bias_a << bias_a.at(0), bias_a.at(1), bias_a.at(2);
+      // Parse zupt_max_disparity (note: this is set from VioManager, but can be overridden in config)
+      parser->parse_config("init_zupt_max_disparity", init_zupt_max_disparity);
     }
     PRINT_DEBUG("  - init_window_time: %.2f\n", init_window_time);
     PRINT_DEBUG("  - init_imu_thresh: %.2f\n", init_imu_thresh);
     PRINT_DEBUG("  - init_max_disparity: %.2f\n", init_max_disparity);
+    PRINT_DEBUG("  - init_zupt_max_disparity: %.2f\n", init_zupt_max_disparity);
     PRINT_DEBUG("  - init_max_features: %.2f\n", init_max_features);
     if (init_max_features < 15) {
       PRINT_ERROR(RED "number of requested feature tracks to init not enough!!\n" RESET);
