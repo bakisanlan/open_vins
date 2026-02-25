@@ -145,11 +145,28 @@ public:
     return ids_last;
   }
 
-  /// Getter method for number of active features
-  int get_num_features() { return num_features; }
+  /// Getter method for number of active features (returns value for first camera or default)
+  int get_num_features() {
+    if (!num_features_per_cam.empty())
+      return num_features_per_cam.begin()->second;
+    return 0;
+  }
 
-  /// Setter method for number of active features
-  void set_num_features(int _num_features) { num_features = _num_features; }
+  /// Setter method for number of active features (sets uniformly for all cameras)
+  void set_num_features(int _num_features) {
+    for (auto &pair : num_features_per_cam)
+      pair.second = _num_features;
+  }
+
+  /// Getter method for number of active features for a specific camera
+  int get_num_features(size_t cam_id) {
+    if (num_features_per_cam.find(cam_id) != num_features_per_cam.end())
+      return num_features_per_cam[cam_id];
+    return get_num_features();
+  }
+
+  /// Setter method for number of active features for a specific camera
+  void set_num_features(size_t cam_id, int _num_features) { num_features_per_cam[cam_id] = _num_features; }
 
 protected:
   /// Camera object which has all calibration in it
@@ -161,8 +178,8 @@ protected:
   /// If we are a fisheye model or not
   std::map<size_t, bool> camera_fisheye;
 
-  /// Number of features we should try to track frame to frame
-  int num_features;
+  /// Number of features we should try to track frame to frame (per camera)
+  std::unordered_map<size_t, int> num_features_per_cam;
 
   /// If we should use binocular tracking or stereo tracking for multi-camera
   bool use_stereo;

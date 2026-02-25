@@ -29,7 +29,11 @@ using namespace ov_core;
 
 TrackBase::TrackBase(std::unordered_map<size_t, std::shared_ptr<CamBase>> cameras, int numfeats, int numaruco, bool stereo,
                      HistogramMethod histmethod)
-    : camera_calib(cameras), database(new FeatureDatabase()), num_features(numfeats), use_stereo(stereo), histogram_method(histmethod) {
+    : camera_calib(cameras), database(new FeatureDatabase()), use_stereo(stereo), histogram_method(histmethod) {
+  // Initialize per-camera feature counts (uniform by default)
+  for (const auto &cam : camera_calib) {
+    num_features_per_cam[cam.first] = numfeats;
+  }
   // Our current feature ID should be larger then the number of aruco tags we have (each has 4 corners)
   currid = 4 * (size_t)numaruco + 1;
   // Create our mutex array based on the number of cameras we have

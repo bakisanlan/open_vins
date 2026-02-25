@@ -34,6 +34,8 @@
 #include "utils/print.h"
 #include "utils/sensor_data.h"
 
+#include <set>
+
 #include "init/InertialInitializer.h"
 
 #include "state/Propagator.h"
@@ -115,7 +117,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
     of_statistics.open(params.record_timing_filepath, std::ofstream::out | std::ofstream::app);
     // Write the header information into it
     of_statistics << "# timestamp (sec),tracking,propagation,msckf update,";
-    if (state->_options.max_slam_features > 0) {
+    if (!state->_options.max_slam_per_cam.empty()) {
       of_statistics << "slam update,slam delayed,";
     }
     of_statistics << "re-tri & marg,total" << std::endl;
@@ -137,6 +139,16 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
     trackFEATS = std::shared_ptr<TrackBase>(new TrackDescriptor(
         state->_cam_intrinsics_cameras, init_max_features, state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist, params.knn_ratio));
+  }
+
+  // Override per-camera feature counts if specified (scaled down for init)
+  if (!params.num_pts_per_cam.empty()) {
+    for (const auto &pair : params.num_pts_per_cam) {
+      // Scale down for initialization (same ratio as init_max_features / num_pts)
+      double init_ratio = (double)params.init_options.init_max_features / (double)params.num_pts;
+      int init_count = std::max(1, (int)std::floor(pair.second * init_ratio));
+      trackFEATS->set_num_features((size_t)pair.first, init_count);
+    }
   }
 
   // Initialize our aruco tag extractor
@@ -437,18 +449,62 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     it0++;
   }
 
-  // Append a new SLAM feature if we have the room to do so
+  // Append new SLAM features if we have the room to do so (per-camera quotas)
   // Also check that we have waited our delay amount (normally prevents bad first set of slam points)
-  if (state->_options.max_slam_features > 0 && message.timestamp - startup_time >= params.dt_slam_delay &&
-      (int)state->_features_SLAM.size() < state->_options.max_slam_features + curr_aruco_tags) {
-    // Get the total amount to add, then the max amount that we can add given our marginalize feature array
-    int amount_to_add = (state->_options.max_slam_features + curr_aruco_tags) - (int)state->_features_SLAM.size();
-    int valid_amount = (amount_to_add > (int)feats_maxtracks.size()) ? (int)feats_maxtracks.size() : amount_to_add;
-    // If we have at least 1 that we can add, lets add it!
-    // Note: we remove them from the feat_marg array since we don't want to reuse information...
-    if (valid_amount > 0) {
-      feats_slam.insert(feats_slam.end(), feats_maxtracks.end() - valid_amount, feats_maxtracks.end());
-      feats_maxtracks.erase(feats_maxtracks.end() - valid_amount, feats_maxtracks.end());
+  if (!state->_options.max_slam_per_cam.empty() && message.timestamp - startup_time >= params.dt_slam_delay) {
+
+    // Count current SLAM features per camera (excluding aruco tags)
+    std::unordered_map<int, int> slam_count_per_cam;
+    for (const auto &lm : state->_features_SLAM) {
+      if ((int)lm.second->_featid > 4 * state->_options.max_aruco_features) {
+        slam_count_per_cam[lm.second->_unique_camera_id]++;
+      }
+    }
+
+    // Group feats_maxtracks by their primary camera id
+    std::unordered_map<int, std::vector<std::shared_ptr<Feature>>> maxtracks_per_cam;
+    for (auto &feat : feats_maxtracks) {
+      // Determine the primary camera (the one with the most measurements)
+      int primary_cam = -1;
+      size_t most_meas = 0;
+      for (const auto &pair : feat->timestamps) {
+        if (pair.second.size() > most_meas) {
+          most_meas = pair.second.size();
+          primary_cam = (int)pair.first;
+        }
+      }
+      if (primary_cam >= 0) {
+        maxtracks_per_cam[primary_cam].push_back(feat);
+      }
+    }
+
+    // For each camera, promote features up to its per-camera quota
+    std::set<size_t> promoted_feat_ids;
+    for (const auto &cam_quota : state->_options.max_slam_per_cam) {
+      int cam_id = cam_quota.first;
+      int max_for_cam = cam_quota.second;
+      int current_count = slam_count_per_cam[cam_id];
+      int slots_available = max_for_cam - current_count;
+
+      if (slots_available > 0 && maxtracks_per_cam.find(cam_id) != maxtracks_per_cam.end()) {
+        auto &cam_tracks = maxtracks_per_cam[cam_id];
+        int valid_amount = std::min(slots_available, (int)cam_tracks.size());
+        // Take the last valid_amount features (longest tracks, since feats_marg was sorted)
+        for (int j = (int)cam_tracks.size() - valid_amount; j < (int)cam_tracks.size(); j++) {
+          feats_slam.push_back(cam_tracks[j]);
+          promoted_feat_ids.insert(cam_tracks[j]->featid);
+        }
+      }
+    }
+
+    // Remove promoted features from feats_maxtracks so they are not reused for MSCKF
+    auto it_mt = feats_maxtracks.begin();
+    while (it_mt != feats_maxtracks.end()) {
+      if (promoted_feat_ids.count((*it_mt)->featid)) {
+        it_mt = feats_maxtracks.erase(it_mt);
+      } else {
+        it_mt++;
+      }
     }
   }
 
@@ -613,7 +669,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for tracking\n" RESET, time_track);
   PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for propagation\n" RESET, time_prop);
   PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for MSCKF update (%d feats)\n" RESET, time_msckf, (int)featsup_MSCKF.size());
-  if (state->_options.max_slam_features > 0) {
+  if (!state->_options.max_slam_per_cam.empty()) {
     PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for SLAM update (%d feats)\n" RESET, time_slam_update, (int)state->_features_SLAM.size());
     PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for SLAM delayed init (%d feats)\n" RESET, time_slam_delay, (int)feats_slam_DELAYED.size());
   }
@@ -636,7 +692,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
     // Append to the file
     of_statistics << std::fixed << std::setprecision(15) << timestamp_inI << "," << std::fixed << std::setprecision(5) << time_track << ","
                   << time_prop << "," << time_msckf << ",";
-    if (state->_options.max_slam_features > 0) {
+    if (!state->_options.max_slam_per_cam.empty()) {
       of_statistics << time_slam_update << "," << time_slam_delay << ",";
     }
     of_statistics << time_marg << "," << time_total << std::endl;

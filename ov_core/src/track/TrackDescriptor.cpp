@@ -360,7 +360,7 @@ void TrackDescriptor::perform_detection_monocular(const cv::Mat &img0, const cv:
 
   // Extract our features (use FAST with griding)
   std::vector<cv::KeyPoint> pts0_ext;
-  Grider_FAST::perform_griding(img0, mask0, pts0_ext, num_features, grid_x, grid_y, threshold, true);
+  Grider_FAST::perform_griding(img0, mask0, pts0_ext, get_num_features(), grid_x, grid_y, threshold, true);
 
   // For all new points, extract their descriptors
   cv::Mat desc0_ext;
@@ -416,7 +416,7 @@ void TrackDescriptor::perform_detection_stereo(const cv::Mat &img0, const cv::Ma
                   for (int i = range.start; i < range.end; i++) {
                     bool is_left = (i == 0);
                     Grider_FAST::perform_griding(is_left ? img0 : img1, is_left ? mask0 : mask1, is_left ? pts0_ext : pts1_ext,
-                                                 num_features, grid_x, grid_y, threshold, true);
+                                                 get_num_features(), grid_x, grid_y, threshold, true);
                     (is_left ? orb0 : orb1)->compute(is_left ? img0 : img1, is_left ? pts0_ext : pts1_ext, is_left ? desc0_ext : desc1_ext);
                   }
                 }));

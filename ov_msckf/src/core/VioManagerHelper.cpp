@@ -119,9 +119,16 @@ bool VioManager::try_to_initialize(const ov_core::CameraData &message) {
 
       // Cleanup any features older than the initialization time
       // Also increase the number of features to the desired amount during estimation
-      // NOTE: we will split the total number of features over all cameras uniformly
       trackFEATS->get_feature_database()->cleanup_measurements(state->_timestamp);
-      trackFEATS->set_num_features(std::floor((double)params.num_pts / (double)params.state_options.num_cameras));
+      if (!params.num_pts_per_cam.empty()) {
+        // Use per-camera feature counts if configured
+        for (const auto &pair : params.num_pts_per_cam) {
+          trackFEATS->set_num_features((size_t)pair.first, pair.second);
+        }
+      } else {
+        // Fall back to uniform split across all cameras
+        trackFEATS->set_num_features(std::floor((double)params.num_pts / (double)params.state_options.num_cameras));
+      }
       if (trackARUCO != nullptr) {
         trackARUCO->get_feature_database()->cleanup_measurements(state->_timestamp);
       }

@@ -420,6 +420,10 @@ struct VioManagerOptions {
   /// The number of points we should extract and track in *each* image frame. This highly effects the computation required for tracking.
   int num_pts = 150;
 
+  /// Per-camera feature counts (overrides num_pts / num_cameras when set)
+  /// Key is camera id, value is feature count for that camera
+  std::map<int, int> num_pts_per_cam;
+
   /// Fast extraction threshold
   int fast_threshold = 20;
 
@@ -460,10 +464,11 @@ struct VioManagerOptions {
       parser->parse_config("num_opencv_threads", num_opencv_threads);
       parser->parse_config("multi_threading_pubs", use_multi_threading_pubs, false);
       parser->parse_config("multi_threading_subs", use_multi_threading_subs, false);
-      parser->parse_config("num_pts", num_pts);
+      parser->parse_config("num_pts", num_pts, false); // Make num_pts optional since per-camera exists
       parser->parse_config("fast_threshold", fast_threshold);
       parser->parse_config("grid_x", grid_x);
       parser->parse_config("grid_y", grid_y);
+
       parser->parse_config("min_px_dist", min_px_dist);
       std::string histogram_method_str = "HISTOGRAM";
       parser->parse_config("histogram_method", histogram_method_str);
@@ -482,6 +487,15 @@ struct VioManagerOptions {
       }
       parser->parse_config("knn_ratio", knn_ratio);
       parser->parse_config("track_frequency", track_frequency);
+
+      // Per-camera feature counts (check up to 10 cameras to avoid ordering issues with num_cameras initialization)
+      for (int i = 0; i < 10; i++) {
+        int cam_pts = -1;
+        parser->parse_config("num_pts_cam" + std::to_string(i), cam_pts, false);
+        if (cam_pts >= 0) {
+          num_pts_per_cam[i] = cam_pts;
+        }
+      }
     }
     PRINT_DEBUG("FEATURE TRACKING PARAMETERS:\n");
     PRINT_DEBUG("  - use_stereo: %d\n", use_stereo);
@@ -493,6 +507,9 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - use multi-threading pubs: %d\n", use_multi_threading_pubs);
     PRINT_DEBUG("  - use multi-threading subs: %d\n", use_multi_threading_subs);
     PRINT_DEBUG("  - num_pts: %d\n", num_pts);
+    for (const auto &pair : num_pts_per_cam) {
+      PRINT_DEBUG("  - num_pts_cam%d: %d\n", pair.first, pair.second);
+    }
     PRINT_DEBUG("  - fast threshold: %d\n", fast_threshold);
     PRINT_DEBUG("  - grid X by Y: %d by %d\n", grid_x, grid_y);
     PRINT_DEBUG("  - min px dist: %d\n", min_px_dist);

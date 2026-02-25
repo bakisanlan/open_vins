@@ -27,6 +27,8 @@
 #include "utils/print.h"
 #include "utils/sensor_data.h"
 
+#include <map>
+
 namespace ov_msckf {
 
 /**
@@ -67,8 +69,12 @@ struct StateOptions {
   /// Max clone size of sliding window
   int max_clone_size = 11;
 
-  /// Max number of estimated SLAM features
+  /// Max number of estimated SLAM features (global fallback)
   int max_slam_features = 25;
+
+  /// Max number of estimated SLAM features per camera (overrides max_slam_features when set)
+  /// Key is camera id, value is max SLAM features for that camera
+  std::map<int, int> max_slam_per_cam;
 
   /// Max number of SLAM features we allow to be included in a single EKF update.
   int max_slam_in_update = 1000;
@@ -120,11 +126,26 @@ struct StateOptions {
 
       // State parameters
       parser->parse_config("max_clones", max_clone_size);
-      parser->parse_config("max_slam", max_slam_features);
+      parser->parse_config("max_slam", max_slam_features, false); // Make max_slam optional since per-camera exists
       parser->parse_config("max_slam_in_update", max_slam_in_update);
       parser->parse_config("max_msckf_in_update", max_msckf_in_update);
       parser->parse_config("num_aruco", max_aruco_features);
       parser->parse_config("max_cameras", num_cameras);
+
+      // Per-camera SLAM feature limits (check up to 10 cameras to avoid ordering issues)
+      for (int i = 0; i < 10; i++) {
+        int cam_slam = -1;
+        parser->parse_config("max_slam_cam" + std::to_string(i), cam_slam, false);
+        if (cam_slam >= 0) {
+          max_slam_per_cam[i] = cam_slam;
+        }
+      }
+      // If no per-camera config specified, fall back to uniform split of max_slam_features
+      if (max_slam_per_cam.empty() && max_slam_features > 0) {
+        for (int i = 0; i < num_cameras; i++) {
+          max_slam_per_cam[i] = max_slam_features / num_cameras;
+        }
+      }
 
       // Feature representations
       std::string rep1 = ov_type::LandmarkRepresentation::as_string(feat_rep_msckf);
@@ -165,6 +186,9 @@ struct StateOptions {
     PRINT_DEBUG("  - imu_model: %d\n", imu_model);
     PRINT_DEBUG("  - max_clones: %d\n", max_clone_size);
     PRINT_DEBUG("  - max_slam: %d\n", max_slam_features);
+    for (const auto &pair : max_slam_per_cam) {
+      PRINT_DEBUG("  - max_slam_cam%d: %d\n", pair.first, pair.second);
+    }
     PRINT_DEBUG("  - max_slam_in_update: %d\n", max_slam_in_update);
     PRINT_DEBUG("  - max_msckf_in_update: %d\n", max_msckf_in_update);
     PRINT_DEBUG("  - max_aruco: %d\n", max_aruco_features);

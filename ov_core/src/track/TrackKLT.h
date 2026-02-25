@@ -90,7 +90,7 @@ protected:
    * Passed images should already be grayscaled.
    */
   void perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
-                                   std::vector<size_t> &ids0);
+                                   std::vector<size_t> &ids0, size_t cam_id);
 
   /**
    * @brief Detects new features in the current stereo pair
