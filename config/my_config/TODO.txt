@@ -1,0 +1,6 @@
+TODO:
+
+Check condition number
+check number of feature
+check covariance
+
