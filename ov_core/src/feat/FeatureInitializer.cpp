@@ -28,7 +28,8 @@
 using namespace ov_core;
 
 bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
-                                              std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM) {
+                                              std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                                              double *cond_number_out) {
 
   // Total number of measurements
   // Also set the first measurement to be the anchor frame
@@ -94,9 +95,10 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   singularValues = svd.singularValues();
   double condA = singularValues(0, 0) / singularValues(singularValues.rows() - 1, 0);
 
-  // std::stringstream ss;
-  // ss << feat->featid << " - cond " << std::abs(condA) << " - z " << p_f(2, 0) << std::endl;
-  // PRINT_DEBUG(ss.str().c_str());
+  // Output the condition number if requested (for aggregate statistics)
+  if (cond_number_out != nullptr) {
+    *cond_number_out = std::abs(condA);
+  }
 
   // If we have a bad condition number, or it is too close
   // Then set the flag for bad (i.e. set z-axis to nan)
@@ -195,7 +197,8 @@ bool FeatureInitializer::single_triangulation_1d(std::shared_ptr<Feature> feat,
 }
 
 bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
-                                            std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM) {
+                                            std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                                            double *baseline_ratio_out) {
 
   // Get into inverse depth
   double rho = 1 / feat->p_FinA(2);
@@ -356,16 +359,18 @@ bool FeatureInitializer::single_gaussnewton(std::shared_ptr<Feature> feat,
         base_line_max = base_line;
     }
   }
-  // std::stringstream ss;
-  // ss << feat->featid << " - max base " << (feat->p_FinA.norm() / base_line_max) << " - z " << feat->p_FinA(2) << std::endl;
-  // PRINT_DEBUG(ss.str().c_str());
+  // Compute and output the baseline ratio if requested (for aggregate statistics)
+  double baseline_ratio = (base_line_max > 0.0) ? (feat->p_FinA.norm() / base_line_max) : 0.0;
+  if (baseline_ratio_out != nullptr) {
+    *baseline_ratio_out = baseline_ratio;
+  }
 
   // Check if this feature is bad or not
   // 1. If the feature is too close
   // 2. If the feature is invalid
   // 3. If the baseline ratio is large
   if (feat->p_FinA(2) < _options.min_dist || feat->p_FinA(2) > _options.max_dist ||
-      (feat->p_FinA.norm() / base_line_max) > _options.max_baseline || std::isnan(feat->p_FinA.norm())) {
+      baseline_ratio > _options.max_baseline || std::isnan(feat->p_FinA.norm())) {
     return false;
   }
 

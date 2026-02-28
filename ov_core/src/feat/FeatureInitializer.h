@@ -97,7 +97,8 @@ public:
    * in global frame)
    * @return Returns false if it fails to triangulate (based on the thresholds)
    */
-  bool single_triangulation(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM);
+  bool single_triangulation(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                             double *cond_number_out = nullptr);
 
   /**
    * @brief Uses a linear triangulation to get initial estimate for the feature, treating the anchor observation as a true bearing.
@@ -119,7 +120,8 @@ public:
    * in global frame)
    * @return Returns false if it fails to be optimize (based on the thresholds)
    */
-  bool single_gaussnewton(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM);
+  bool single_gaussnewton(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
+                           double *baseline_ratio_out = nullptr);
 
   /**
    * @brief Gets the current configuration of the feature initializer

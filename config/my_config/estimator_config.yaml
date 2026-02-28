@@ -14,9 +14,9 @@ calib_imu_intrinsics: true # if imu intrinsics should be calibrated (rotation an
 calib_imu_g_sensitivity: true # if gyroscope gravity sensitivity (Tg) should be calibrated
 
 max_clones: 11 # how many clones in the sliding window
-#max_slam: 50 # number of features in our state vector
-max_slam_cam0: 30         # wide-angle SLAM budget
-max_slam_cam1: 20         # narrow-angle SLAM budget
+max_slam: 50 # number of features in our state vector
+#max_slam_cam0: 30         # wide-angle SLAM budget
+#max_slam_cam1: 20         # narrow-angle SLAM budget
 max_slam_in_update: 25 # update can be split into sequential updates of batches, how many in a batch
 max_msckf_in_update: 40 # how many MSCKF features to use in the update
 dt_slam_delay: 1 # delay before initializing (helps with stability from bad initialization...)
@@ -31,7 +31,7 @@ feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
 # we support either IMU-based or disparity detection.
 try_zupt: true
 zupt_chi2_multipler: 3 # set to 0 for only disp-based
-zupt_max_velocity: 1
+zupt_max_velocity: 0.2
 zupt_noise_multiplier: 10
 zupt_max_disparity: 0 # set to 0 for only imu-based
 zupt_only_at_beginning: true
@@ -81,12 +81,12 @@ filepath_gt: "/tmp/ov_groundtruth.txt"
 # our front-end feature tracking parameters
 # we have a KLT and descriptor based (KLT is better implemented...)
 use_klt: true # if true we will use KLT, otherwise use a ORB descriptor + robust matching
-#num_pts: 200 # number of points (per camera) we will extract and try to track
-num_pts_cam0: 200         # wide-angle: more features
-num_pts_cam1: 100         # narrow-angle: fewer features
+num_pts: 200 # number of points (per camera) we will extract and try to track
+#num_pts_cam0: 200         # wide-angle: more features
+#num_pts_cam1: 100         # narrow-angle: fewer features
 fast_threshold: 31 # threshold for fast extraction (warning: lower threshs can be expensive)
-grid_x: 5 # extraction sub-grid count for horizontal direction (uniform tracking)
-grid_y: 5 # extraction sub-grid count for vertical direction (uniform tracking)
+grid_x: 10 # extraction sub-grid count for horizontal direction (uniform tracking)
+grid_y: 10 # extraction sub-grid count for vertical direction (uniform tracking)
 min_px_dist: 10 # distance between features (features near each other provide less information)
 knn_ratio: 0.65 # descriptor knn threshold for the top two descriptor matches
 track_frequency: 31.0 # frequency we will perform feature tracking at (in frames per second / hertz)
@@ -104,7 +104,7 @@ fi_min_dist: 0.10
 fi_max_dist: 200.0
 fi_max_baseline: 300
 fi_max_cond_number: 50000
-#fi_triangulate_1d: false
+fi_triangulate_1d: false
 
 # ==================================================================
 # ==================================================================
@@ -118,7 +118,8 @@ up_aruco_sigma_px: 1
 up_aruco_chi2_multipler: 1
 
 # masks for our images
-use_mask: false
+use_mask: true
+mask0: "fisheyemask_960-540.png" #relative to current file
 
 # imu and camera spacial-temporal
 # imu config should also have the correct noise values
