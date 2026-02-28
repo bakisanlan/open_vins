@@ -115,21 +115,46 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   }
 
   // 3. Try to triangulate all MSCKF or new SLAM features that have measurements
+  // Aggregate statistics for triangulation diagnostics
+  int tri_total_tried = 0;
+  int tri_total_success = 0;
+  double tri_max_cond = 0.0, tri_sum_cond = 0.0;
+  int tri_count_cond = 0;
+  double tri_max_baseline_ratio = 0.0, tri_sum_baseline_ratio = 0.0;
+  int tri_count_baseline_ratio = 0;
+
   auto it1 = feature_vec.begin();
   while (it1 != feature_vec.end()) {
+    tri_total_tried++;
 
     // Triangulate the feature and remove if it fails
     bool success_tri = true;
+    double cond_out = 0.0;
     if (initializer_feat->config().triangulate_1d) {
       success_tri = initializer_feat->single_triangulation_1d(*it1, clones_cam);
     } else {
-      success_tri = initializer_feat->single_triangulation(*it1, clones_cam);
+      success_tri = initializer_feat->single_triangulation(*it1, clones_cam, &cond_out);
+      // Accumulate condition number stats (even for failures)
+      if (cond_out > 0.0) {
+        tri_sum_cond += cond_out;
+        tri_count_cond++;
+        if (cond_out > tri_max_cond)
+          tri_max_cond = cond_out;
+      }
     }
 
     // Gauss-newton refine the feature
     bool success_refine = true;
+    double baseline_ratio_out = 0.0;
     if (initializer_feat->config().refine_features) {
-      success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam);
+      success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam, &baseline_ratio_out);
+      // Accumulate baseline ratio stats (even for failures)
+      if (baseline_ratio_out > 0.0) {
+        tri_sum_baseline_ratio += baseline_ratio_out;
+        tri_count_baseline_ratio++;
+        if (baseline_ratio_out > tri_max_baseline_ratio)
+          tri_max_baseline_ratio = baseline_ratio_out;
+      }
     }
 
     // Remove the feature if not a success
@@ -138,9 +163,19 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
       it1 = feature_vec.erase(it1);
       continue;
     }
+    tri_total_success++;
     it1++;
   }
   rT2 = boost::posix_time::microsec_clock::local_time();
+
+  // Print aggregate triangulation statistics
+  {
+    double mean_cond = (tri_count_cond > 0) ? (tri_sum_cond / tri_count_cond) : 0.0;
+    double mean_baseline = (tri_count_baseline_ratio > 0) ? (tri_sum_baseline_ratio / tri_count_baseline_ratio) : 0.0;
+    PRINT_INFO(MAGENTA "[TRI]: tried=%d | ok=%d | cond: max=%.1f/%.0f mean=%.1f | baseline_ratio: max=%.1f/%.0f mean=%.1f\n" RESET,
+               tri_total_tried, tri_total_success, tri_max_cond, initializer_feat->config().max_cond_number, mean_cond,
+               tri_max_baseline_ratio, initializer_feat->config().max_baseline, mean_baseline);
+  }
 
   // Calculate the max possible measurement size
   size_t max_meas_size = 0;

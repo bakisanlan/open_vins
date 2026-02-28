@@ -84,8 +84,6 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
   }
   double oldest_time = newest_cam_time - params.init_window_time - 0.10;
   if ((newest_cam_time < 0 || oldest_time < 0) && params.init_zupt_max_disparity != 0) {
-    PRINT_DEBUG(YELLOW "[init]: CHECK2" RESET);
-
     return false;
   }
 
