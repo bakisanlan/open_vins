@@ -50,6 +50,7 @@ class StateHelper;
 class UpdaterMSCKF;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
+class UpdaterBaro;
 class Propagator;
 
 /**
@@ -79,6 +80,13 @@ public:
    * @param message Contains our timestamp, images, and camera ids
    */
   void feed_measurement_camera(const ov_core::CameraData &message) { track_image_and_update(message); }
+
+  /**
+   * @brief Feed function for sequential barometric altimeter data
+   * @param timestamp Time of the barometric measurement
+   * @param altitude Relative altitude from the initialization position
+   */
+  void feed_measurement_baro(double timestamp, double altitude);
 
   /**
    * @brief Feed function for a synchronized simulated cameras
@@ -205,6 +213,12 @@ protected:
 
   /// Our zero velocity tracker
   std::shared_ptr<UpdaterZeroVelocity> updaterZUPT;
+
+  /// Our barometric altimeter updater
+  std::shared_ptr<UpdaterBaro> updaterBaro;
+
+  /// Queue for sequential altitude updates
+  std::vector<std::pair<double, double>> baro_queue;
 
   /// This is the queue of measurement times that have come in since we starting doing initialization
   /// After we initialize, we will want to prop & update to the latest timestamp quickly

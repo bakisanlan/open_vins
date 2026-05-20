@@ -144,6 +144,9 @@ struct VioManagerOptions {
   /// Update options for ARUCO features (pixel noise and chi2 multiplier)
   UpdaterOptions aruco_options;
 
+  /// Update options for barometric altimeter (meters noise and chi2 multiplier)
+  UpdaterOptions baro_options;
+
   /// Update options for zero velocity (chi2 multiplier)
   UpdaterOptions zupt_options;
 
@@ -169,9 +172,12 @@ struct VioManagerOptions {
       parser->parse_config("up_slam_chi2_multipler", slam_options.chi2_multipler);
       parser->parse_config("up_aruco_sigma_px", aruco_options.sigma_pix);
       parser->parse_config("up_aruco_chi2_multipler", aruco_options.chi2_multipler);
+      parser->parse_config("up_baro_sigma_m", baro_options.sigma_pix);
+      parser->parse_config("up_baro_chi2_multipler", baro_options.chi2_multipler);
       msckf_options.sigma_pix_sq = std::pow(msckf_options.sigma_pix, 2);
       slam_options.sigma_pix_sq = std::pow(slam_options.sigma_pix, 2);
       aruco_options.sigma_pix_sq = std::pow(aruco_options.sigma_pix, 2);
+      baro_options.sigma_pix_sq = std::pow(baro_options.sigma_pix, 2);
       parser->parse_config("zupt_chi2_multipler", zupt_options.chi2_multipler);
     }
     PRINT_DEBUG("  Updater MSCKF Feats:\n");
@@ -180,6 +186,8 @@ struct VioManagerOptions {
     slam_options.print();
     PRINT_DEBUG("  Updater ARUCO Tags:\n");
     aruco_options.print();
+    PRINT_DEBUG("  Updater Barometer:\n");
+    baro_options.print();
     PRINT_DEBUG("  Updater ZUPT:\n");
     zupt_options.print();
   }

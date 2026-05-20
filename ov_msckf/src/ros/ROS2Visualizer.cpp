@@ -216,6 +216,40 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
       PRINT_INFO("subscribing to cam (mono): %s\n", cam_topic.c_str());
     }
   }
+
+  // Create barometer subscriber
+  std::string topic_baro;
+  _node->declare_parameter<std::string>("topic_baro", "/mavros/imu/static_pressure");
+  _node->get_parameter("topic_baro", topic_baro);
+  sub_baro = _node->create_subscription<sensor_msgs::msg::FluidPressure>(
+      topic_baro, rclcpp::SensorDataQoS(),
+      std::bind(&ROS2Visualizer::callback_baro, this, std::placeholders::_1));
+  PRINT_INFO("subscribing to Baro: %s\n", topic_baro.c_str());
+}
+
+void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::SharedPtr msg) {
+
+  // Don't process baro until VIO is initialized so both share the same z=0 origin
+  if (!_app->initialized())
+    return;
+
+  // Get the ROS timestamp
+  double timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+  double pressure = msg->fluid_pressure; // in Pascals
+
+  // Store the first pressure reading AFTER VIO init as the reference
+  if (baro_ref_pressure < 0) {
+    baro_ref_pressure = pressure;
+    PRINT_INFO(CYAN "[BARO]: Reference pressure set to %.2f Pa (after VIO init)\n" RESET, baro_ref_pressure);
+    return;
+  }
+
+  // Convert pressure to relative altitude using the barometric formula
+  // Altitude = 44330.0 * (1.0 - (P / P0)^(1/5.255))
+  double altitude = 44330.0 * (1.0 - std::pow(pressure / baro_ref_pressure, 1.0 / 5.255));
+
+  // Feed baro measurement into the VIO manager
+  _app->feed_measurement_baro(timestamp, altitude);
 }
 
 void ROS2Visualizer::visualize() {
