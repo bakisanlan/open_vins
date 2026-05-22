@@ -45,6 +45,7 @@
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 #include "update/UpdaterBaro.h"
+#include "update/UpdaterYaw.h"
 
 using namespace ov_core;
 using namespace ov_type;
@@ -177,6 +178,12 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
   // Barometer updater
   updaterBaro = std::make_shared<UpdaterBaro>(params.baro_options);
+
+  // Magnetometer updater
+  // If we are using magnetometer yaw updates, then create the updater
+  if (params.use_mag_yaw) {
+    updaterYaw = std::make_shared<UpdaterYaw>(params.mag_yaw_options, params.mag_yaw_sigma, params.mag_yaw_update_rate);
+  }
 }
 
 void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
@@ -201,6 +208,12 @@ void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
   // No need to push back if we are just doing the zv-update at the begining and we have moved
   if (is_initialized_vio && updaterZUPT != nullptr && (!params.zupt_only_at_beginning || !has_moved_since_zupt)) {
     updaterZUPT->feed_imu(message, oldest_time);
+  }
+}
+
+void VioManager::feed_measurement_yaw(const ov_core::YawData &message) {
+  if (updaterYaw != nullptr) {
+    updaterYaw->feed_yaw(message);
   }
 }
 
@@ -611,15 +624,32 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   // Apply barometric measurements if we have any queued
   //===================================================================================
 
+  if (!baro_queue.empty()) {
+    PRINT_INFO(CYAN "[BARO QUEUE]: size=%zu, front_time=%.4f, state_time=%.4f, diff=%.4f\n" RESET,
+               baro_queue.size(), baro_queue.front().first, state->_timestamp,
+               baro_queue.front().first - state->_timestamp);
+  }
+
   while (!baro_queue.empty() && baro_queue.front().first <= state->_timestamp) {
     double baro_time = baro_queue.front().first;
     double baro_alt = baro_queue.front().second;
 
-//    bool baro_update_success = updaterBaro->try_update(state, baro_time, baro_alt);
-//    if (baro_update_success) {
- //     PRINT_INFO(CYAN "[BARO]: Applied update spanning time %.3f with tracking frame at %.3f.\n" RESET, baro_time, state->_timestamp);
- //   }
+    bool baro_update_success = updaterBaro->try_update(state, baro_time, baro_alt);
+    if (baro_update_success) {
+      PRINT_INFO(CYAN "[BARO]: Applied update spanning time %.3f with tracking frame at %.3f.\n" RESET, baro_time, state->_timestamp);
+    }
     baro_queue.erase(baro_queue.begin());
+  }
+
+  //===================================================================================
+  // Magnetometer yaw update (if enabled and we have data)
+  //===================================================================================
+
+  if (updaterYaw != nullptr && updaterYaw->has_data() && params.mag_yaw_mode == "ekf") {
+    bool did_yaw_update = updaterYaw->try_update(state, message.timestamp);
+    if (did_yaw_update) {
+      propagator->invalidate_cache();
+    }
   }
 
   //===================================================================================

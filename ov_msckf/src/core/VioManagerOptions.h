@@ -94,6 +94,21 @@ struct VioManagerOptions {
   /// If we should only use the zupt at the very beginning static initialization phase
   bool zupt_only_at_beginning = false;
 
+  /// If we should try to fuse magnetometer yaw from MAVROS
+  bool use_mag_yaw = false;
+
+  /// Magnetometer yaw measurement noise standard deviation (rad), ~5 degrees default
+  double mag_yaw_sigma = 0.087;
+
+  /// Chi2 multiplier for yaw update rejection
+  double mag_yaw_chi2_multipler = 1.0;
+
+  /// Maximum yaw update rate in Hz (0 = unlimited)
+  double mag_yaw_update_rate = 10.0;
+
+  /// Magnetometer yaw correction mode: "ekf" = Kalman update (Approach 1), "output" = output-only rotation (Approach 2)
+  std::string mag_yaw_mode = "ekf";
+
   /// If we should record the timing performance to file
   bool record_timing_information = false;
 
@@ -117,6 +132,11 @@ struct VioManagerOptions {
       parser->parse_config("zupt_noise_multiplier", zupt_noise_multiplier);
       parser->parse_config("zupt_max_disparity", zupt_max_disparity);
       parser->parse_config("zupt_only_at_beginning", zupt_only_at_beginning);
+      parser->parse_config("use_mag_yaw", use_mag_yaw, false);
+      parser->parse_config("mag_yaw_sigma", mag_yaw_sigma, false);
+      parser->parse_config("mag_yaw_chi2_multipler", mag_yaw_chi2_multipler, false);
+      parser->parse_config("mag_yaw_update_rate", mag_yaw_update_rate, false);
+      parser->parse_config("mag_yaw_mode", mag_yaw_mode, false);
       parser->parse_config("record_timing_information", record_timing_information);
       parser->parse_config("record_timing_filepath", record_timing_filepath);
     }
@@ -126,6 +146,11 @@ struct VioManagerOptions {
     PRINT_DEBUG("  - zupt_noise_multiplier: %.2f\n", zupt_noise_multiplier);
     PRINT_DEBUG("  - zupt_max_disparity: %.4f\n", zupt_max_disparity);
     PRINT_DEBUG("  - zupt_only_at_beginning?: %d\n", zupt_only_at_beginning);
+    PRINT_DEBUG("  - use_mag_yaw: %d\n", use_mag_yaw);
+    PRINT_DEBUG("  - mag_yaw_sigma: %.4f rad (%.2f deg)\n", mag_yaw_sigma, mag_yaw_sigma * 180.0 / M_PI);
+    PRINT_DEBUG("  - mag_yaw_chi2_multipler: %.2f\n", mag_yaw_chi2_multipler);
+    PRINT_DEBUG("  - mag_yaw_update_rate: %.1f Hz\n", mag_yaw_update_rate);
+    PRINT_DEBUG("  - mag_yaw_mode: %s\n", mag_yaw_mode.c_str());
     PRINT_DEBUG("  - record timing?: %d\n", (int)record_timing_information);
     PRINT_DEBUG("  - record timing filepath: %s\n", record_timing_filepath.c_str());
   }
@@ -149,6 +174,9 @@ struct VioManagerOptions {
 
   /// Update options for zero velocity (chi2 multiplier)
   UpdaterOptions zupt_options;
+
+  /// Update options for magnetometer yaw (chi2 multiplier)
+  UpdaterOptions mag_yaw_options;
 
   /**
    * @brief This function will load print out all noise parameters loaded.
@@ -179,6 +207,7 @@ struct VioManagerOptions {
       aruco_options.sigma_pix_sq = std::pow(aruco_options.sigma_pix, 2);
       baro_options.sigma_pix_sq = std::pow(baro_options.sigma_pix, 2);
       parser->parse_config("zupt_chi2_multipler", zupt_options.chi2_multipler);
+      mag_yaw_options.chi2_multipler = mag_yaw_chi2_multipler;
     }
     PRINT_DEBUG("  Updater MSCKF Feats:\n");
     msckf_options.print();
@@ -190,6 +219,10 @@ struct VioManagerOptions {
     baro_options.print();
     PRINT_DEBUG("  Updater ZUPT:\n");
     zupt_options.print();
+    if (use_mag_yaw) {
+      PRINT_DEBUG("  Updater MAG YAW:\n");
+      mag_yaw_options.print();
+    }
   }
 
   // STATE DEFAULTS ==========================

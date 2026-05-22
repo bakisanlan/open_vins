@@ -123,6 +123,15 @@ public:
   void callback_stereo(const sensor_msgs::msg::Image::ConstSharedPtr msg0, const sensor_msgs::msg::Image::ConstSharedPtr msg1, int cam_id0,
                        int cam_id1);
 
+  /// Callback for magnetometer yaw from MAVROS
+  void callback_mag_yaw(const sensor_msgs::msg::Imu::SharedPtr msg);
+
+  /**
+   * @brief Callback for MAVROS local position (optional ground truth source)
+   * @param msg PoseStamped from /mavros/local_position/pose in ENU frame
+   */
+  void callback_mavros_gt(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
 protected:
   /// Publish the current state
   void publish_state();
@@ -151,6 +160,7 @@ protected:
   // Our publishers
   image_transport::Publisher it_pub_tracks, it_pub_loop_img_depth, it_pub_loop_img_depth_color;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_poseimu;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_fakegps_vision;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odomimu;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_pathimu;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_points_msckf, pub_points_slam, pub_points_aruco, pub_points_sim;
@@ -166,6 +176,36 @@ protected:
   typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image, sensor_msgs::msg::Image> sync_pol;
   std::vector<std::shared_ptr<message_filters::Synchronizer<sync_pol>>> sync_cam;
   std::vector<std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>>> sync_subs_cam;
+
+  // Magnetometer yaw subscriber
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_mag_yaw;
+  bool mag_yaw_received = false;
+
+  // Output-mode yaw correction state (used when mag_yaw_mode == "output")
+  bool yaw_output_initialized = false;
+  Eigen::Vector3d yaw_corrected_position = Eigen::Vector3d::Zero();
+  Eigen::Vector3d prev_filter_position = Eigen::Vector3d::Zero();
+  double latest_mag_yaw = 0.0;
+  bool have_mag_yaw = false;
+  std::mutex mag_yaw_mtx;
+
+  // Corrected output state for GT error comparison (populated in publish_state)
+  Eigen::Vector3d corrected_p_ENU = Eigen::Vector3d::Zero();
+  Eigen::Vector4d corrected_q_GtoI_ENU = Eigen::Vector4d(0, 0, 0, 1);
+
+  // Fixed frame offset between OpenVINS and MAVROS reference frames
+  // Computed once on the first GT comparison call
+  bool gt_frame_offset_computed = false;
+  Eigen::Matrix3d R_offset = Eigen::Matrix3d::Identity();  // R_GtoI_gt * R_GtoI_est^{-1}
+  Eigen::Matrix3d R_AtoB = Eigen::Matrix3d::Identity();    // maps position coords from est frame to gt frame
+  Eigen::Vector3d p_est_init = Eigen::Vector3d::Zero();
+  Eigen::Vector3d p_gt_init = Eigen::Vector3d::Zero();
+
+  // MAVROS local position as optional ground truth source
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_mavros_gt;
+  geometry_msgs::msg::PoseStamped latest_mavros_gt;
+  bool have_mavros_gt = false;
+  std::mutex mavros_gt_mtx;
 
   // For path viz
   std::vector<geometry_msgs::msg::PoseStamped> poses_imu;

@@ -47,6 +47,8 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   // Setup pose and path publisher
   pub_poseimu = node->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("poseimu", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_poseimu->get_topic_name());
+  pub_fakegps_vision = node->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/vision_pose/pose", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_fakegps_vision->get_topic_name());
   pub_odomimu = node->create_publisher<nav_msgs::msg::Odometry>("odomimu", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_odomimu->get_topic_name());
   pub_pathimu = node->create_publisher<nav_msgs::msg::Path>("pathimu", 2);
@@ -225,6 +227,26 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
       topic_baro, rclcpp::SensorDataQoS(),
       std::bind(&ROS2Visualizer::callback_baro, this, std::placeholders::_1));
   PRINT_INFO("subscribing to Baro: %s\n", topic_baro.c_str());
+
+  // Subscribe to magnetometer yaw from MAVROS (optional)
+  if (_app->get_params().use_mag_yaw) {
+    std::string topic_mag_yaw = "/mavros/imu/data";
+    parser->parse_config("mag_yaw_topic", topic_mag_yaw, false);
+    sub_mag_yaw = _node->create_subscription<sensor_msgs::msg::Imu>(
+        topic_mag_yaw, rclcpp::SensorDataQoS(),
+        std::bind(&ROS2Visualizer::callback_mag_yaw, this, std::placeholders::_1));
+    PRINT_INFO("subscribing to MAG YAW: %s\n", topic_mag_yaw.c_str());
+  }
+
+  // Subscribe to MAVROS local position as optional ground truth (if no GT file and not sim)
+  if (_sim == nullptr && gt_states.empty()) {
+    std::string topic_mavros_gt = "/mavros/local_position/pose";
+    parser->parse_config("mavros_gt_topic", topic_mavros_gt, false);
+    sub_mavros_gt = _node->create_subscription<geometry_msgs::msg::PoseStamped>(
+        topic_mavros_gt, rclcpp::SensorDataQoS(),
+        std::bind(&ROS2Visualizer::callback_mavros_gt, this, std::placeholders::_1));
+    PRINT_INFO("subscribing to MAVROS GT: %s\n", topic_mavros_gt.c_str());
+  }
 }
 
 void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::SharedPtr msg) {
@@ -233,8 +255,9 @@ void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::Shared
   if (!_app->initialized())
     return;
 
-  // Get the ROS timestamp
-  double timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+  // Use VIO state timestamp (not ROS header stamp) because MAVROS baro uses
+  // wall-clock time while OpenVINS uses Gazebo sim time — they don't match.
+  double timestamp = _app->get_state()->_timestamp;
   double pressure = msg->fluid_pressure; // in Pascals
 
   // Store the first pressure reading AFTER VIO init as the reference
@@ -243,6 +266,9 @@ void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::Shared
     PRINT_INFO(CYAN "[BARO]: Reference pressure set to %.2f Pa (after VIO init)\n" RESET, baro_ref_pressure);
     return;
   }
+
+  // Print info 
+  PRINT_INFO(CYAN "[BARO]: Pressure %.2f Pa at %.4f seconds\n" RESET, pressure, timestamp);
 
   // Convert pressure to relative altitude using the barometric formula
   // Altitude = 44330.0 * (1.0 - (P / P0)^(1/5.255))
@@ -622,6 +648,61 @@ void ROS2Visualizer::callback_stereo(const sensor_msgs::msg::Image::ConstSharedP
   std::sort(camera_queue.begin(), camera_queue.end());
 }
 
+void ROS2Visualizer::callback_mag_yaw(const sensor_msgs::msg::Imu::SharedPtr msg) {
+
+  // Extract quaternion from the IMU topic
+  // NOTE: The /imu topic publishes q_world_to_body (inverse convention).
+  // We conjugate (negate x,y,z) to get q_body_to_world for yaw extraction.
+  double qx = -msg->orientation.x;
+  double qy = -msg->orientation.y;
+  double qz = -msg->orientation.z;
+  double qw = msg->orientation.w;
+
+  // Skip if quaternion is all zeros (no orientation data)
+  if (msg->orientation.x == 0 && msg->orientation.y == 0 && msg->orientation.z == 0 && msg->orientation.w == 0) {
+    return;
+  }
+
+  // Extract yaw in ENU frame (FLU body, ENU world)
+  // yaw_enu = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy*qy + qz*qz))
+  double yaw_enu = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
+
+  // Wrap ENU yaw to [-π, π]
+  while (yaw_enu > M_PI)
+    yaw_enu -= 2.0 * M_PI;
+  while (yaw_enu < -M_PI)
+    yaw_enu += 2.0 * M_PI;
+
+  // Create yaw measurement
+  ov_core::YawData data;
+  data.timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+  data.yaw = yaw_enu;
+  data.sigma = _app->get_params().mag_yaw_sigma;
+
+  // Feed to VioManager
+  _app->feed_measurement_yaw(data);
+
+  // Store for output-mode yaw correction
+  {
+    std::lock_guard<std::mutex> lck(mag_yaw_mtx);
+    latest_mag_yaw = yaw_enu;
+    have_mag_yaw = true;
+  }
+
+  PRINT_DEBUG(CYAN "[MAG YAW]: q=[%.3f,%.3f,%.3f,%.3f] yaw_enu=%.1f deg\n" RESET, qx, qy, qz, qw, yaw_enu * 180.0 / M_PI);
+
+  if (!mag_yaw_received) {
+    mag_yaw_received = true;
+    PRINT_INFO(CYAN "[MAG YAW]: first measurement received, yaw_enu=%.1f deg\n" RESET, yaw_enu * 180.0 / M_PI);
+  }
+}
+
+void ROS2Visualizer::callback_mavros_gt(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+  std::lock_guard<std::mutex> lck(mavros_gt_mtx);
+  latest_mavros_gt = *msg;
+  have_mavros_gt = true;
+}
+
 void ROS2Visualizer::publish_state() {
 
   // Get the current state
@@ -636,33 +717,129 @@ void ROS2Visualizer::publish_state() {
   geometry_msgs::msg::PoseWithCovarianceStamped poseIinM;
   poseIinM.header.stamp = ROSVisualizerHelper::get_time_from_seconds(timestamp_inI);
   poseIinM.header.frame_id = "global";
-  poseIinM.pose.pose.orientation.x = state->_imu->quat()(0);
-  poseIinM.pose.pose.orientation.y = state->_imu->quat()(1);
-  poseIinM.pose.pose.orientation.z = state->_imu->quat()(2);
-  poseIinM.pose.pose.orientation.w = state->_imu->quat()(3);
-  poseIinM.pose.pose.position.x = state->_imu->pos()(0);
-  poseIinM.pose.pose.position.y = state->_imu->pos()(1);
-  poseIinM.pose.pose.position.z = state->_imu->pos()(2);
+  // Get ENU position and rotation (R_GtoI)
+  Eigen::Vector3d p_ENU = state->_imu->pos();
+  Eigen::Matrix3d R_GtoI_ENU = state->_imu->Rot();
+  Eigen::Matrix3d R_ItoG_ENU = R_GtoI_ENU.transpose();
+
+  //=========================================================
+  // Output-mode yaw correction (Approach 2)
+  // Applies mag yaw correction at publish time without modifying filter state
+  //=========================================================
+  if (_app->get_params().mag_yaw_mode == "output") {
+    double mag_yaw_local;
+    bool has_yaw;
+    {
+      std::lock_guard<std::mutex> lck(mag_yaw_mtx);
+      mag_yaw_local = latest_mag_yaw;
+      has_yaw = have_mag_yaw;
+    }
+
+    if (has_yaw) {
+      // Extract filter's current yaw from R_ItoG
+      double yaw_filter = std::atan2(R_ItoG_ENU(1, 0), R_ItoG_ENU(0, 0));
+
+      // Compute delta yaw (wrapped to [-π, π])
+      double delta_yaw = mag_yaw_local - yaw_filter;
+      while (delta_yaw > M_PI) delta_yaw -= 2.0 * M_PI;
+      while (delta_yaw < -M_PI) delta_yaw += 2.0 * M_PI;
+
+      // Build R_correction = Rz(delta_yaw)
+      Eigen::Matrix3d R_correction;
+      R_correction << std::cos(delta_yaw), -std::sin(delta_yaw), 0,
+                      std::sin(delta_yaw),  std::cos(delta_yaw), 0,
+                      0,                    0,                   1;
+
+      // Correct orientation: R_ItoG_corrected = R_correction * R_ItoG_filter
+      R_ItoG_ENU = R_correction * R_ItoG_ENU;
+      R_GtoI_ENU = R_ItoG_ENU.transpose();
+
+      // Correct position: rotate incremental position deltas to avoid jumps
+      if (!yaw_output_initialized) {
+        yaw_corrected_position = R_correction * p_ENU;
+        prev_filter_position = p_ENU;
+        yaw_output_initialized = true;
+      } else {
+        Eigen::Vector3d dp = p_ENU - prev_filter_position;
+        Eigen::Vector3d dp_corrected = R_correction * dp;
+        yaw_corrected_position += dp_corrected;
+        prev_filter_position = p_ENU;
+      }
+      p_ENU = yaw_corrected_position;
+    }
+  }
+
+  // Store corrected output state for GT error comparison in publish_groundtruth()
+  corrected_p_ENU = p_ENU;
+  corrected_q_GtoI_ENU = ov_core::rot_2_quat(R_GtoI_ENU);
+
+  // Define ENU to NED rotation matrix
+  Eigen::Matrix3d R_ENU2NED;
+  R_ENU2NED << 0, 1, 0,
+               1, 0, 0,
+               0, 0, -1;
+
+  // Convert position to NED
+  Eigen::Vector3d p_NED = R_ENU2NED * p_ENU;
+
+  // Convert orientation to NED (IMU to NED Global)
+  // R_ItoG_NED = R_ENU2NED * R_ItoG_ENU
+  // Then we want to publish q_GtoI_NED to match OpenVINS convention (or we can publish q_ItoG_NED, but let's stick to how OpenVINS publishes its quaternion state).
+  // Wait, OpenVINS normally publishes state->_imu->quat() which is q_GtoI in JPL.
+  // We will compute R_GtoI_NED = R_ItoG_NED^T = R_ItoG_ENU^T * R_ENU2NED^T = R_GtoI_ENU * R_ENU2NED
+  Eigen::Matrix3d R_GtoI_NED = R_GtoI_ENU * R_ENU2NED;
+  Eigen::Vector4d q_GtoI_NED = ov_core::rot_2_quat(R_GtoI_NED);
+
+  poseIinM.pose.pose.orientation.x = q_GtoI_NED(0);
+  poseIinM.pose.pose.orientation.y = q_GtoI_NED(1);
+  poseIinM.pose.pose.orientation.z = q_GtoI_NED(2);
+  poseIinM.pose.pose.orientation.w = q_GtoI_NED(3);
+  poseIinM.pose.pose.position.x = p_NED(0);
+  poseIinM.pose.pose.position.y = p_NED(1);
+  poseIinM.pose.pose.position.z = p_NED(2);
 
   // Finally set the covariance in the message (in the order position then orientation as per ros convention)
   std::vector<std::shared_ptr<Type>> statevars;
   statevars.push_back(state->_imu->pose()->p());
   statevars.push_back(state->_imu->pose()->q());
   Eigen::Matrix<double, 6, 6> covariance_posori = StateHelper::get_marginal_covariance(_app->get_state(), statevars);
+
+  // Rotate covariance to NED frame
+  Eigen::Matrix<double, 6, 6> R6 = Eigen::Matrix<double, 6, 6>::Zero();
+  R6.block(0, 0, 3, 3) = R_ENU2NED;
+  R6.block(3, 3, 3, 3) = R_ENU2NED;
+  Eigen::Matrix<double, 6, 6> covariance_posori_NED = R6 * covariance_posori * R6.transpose();
+
   for (int r = 0; r < 6; r++) {
     for (int c = 0; c < 6; c++) {
-      poseIinM.pose.covariance[6 * r + c] = covariance_posori(r, c);
+      poseIinM.pose.covariance[6 * r + c] = covariance_posori_NED(r, c);
     }
   }
   pub_poseimu->publish(poseIinM);
 
+  // Publish ENU pose to MAVROS fake GPS vision topic
+  // OpenVINS internal state is already in ENU frame, so use it directly
+  // NOTE: JPL q_GtoI in ROS message fields is implicitly interpreted as Hamilton q_ItoG (body-to-world)
+  geometry_msgs::msg::PoseStamped pose_enu;
+  pose_enu.header.stamp = ROSVisualizerHelper::get_time_from_seconds(timestamp_inI);
+  pose_enu.header.frame_id = "map";
+  pose_enu.pose.position.x = p_ENU(0);
+  pose_enu.pose.position.y = p_ENU(1);
+  pose_enu.pose.position.z = p_ENU(2);
+  Eigen::Vector4d q_GtoI_ENU = ov_core::rot_2_quat(R_GtoI_ENU);
+  pose_enu.pose.orientation.x = q_GtoI_ENU(0);
+  pose_enu.pose.orientation.y = q_GtoI_ENU(1);
+  pose_enu.pose.orientation.z = q_GtoI_ENU(2);
+  pose_enu.pose.orientation.w = q_GtoI_ENU(3);
+  pub_fakegps_vision->publish(pose_enu);
+
   //=========================================================
   //=========================================================
 
-  // Append to our pose vector
+  // Append to our pose vector (keep in original OpenVINS ENU frame)
   geometry_msgs::msg::PoseStamped posetemp;
-  posetemp.header = poseIinM.header;
-  posetemp.pose = poseIinM.pose.pose;
+  posetemp.header = pose_enu.header;
+  posetemp.pose = pose_enu.pose;
   poses_imu.push_back(posetemp);
 
   // Create our path (imu)
@@ -747,18 +924,42 @@ void ROS2Visualizer::publish_groundtruth() {
   double t_ItoC = _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
   double timestamp_inI = _app->get_state()->_timestamp + t_ItoC;
 
-  // Check that we have the timestamp in our GT file [time(sec),q_GtoI,p_IinG,v_IinG,b_gyro,b_accel]
-  if (_sim == nullptr && (gt_states.empty() || !DatasetReader::get_gt_state(timestamp_inI, state_gt, gt_states))) {
-    return;
+  // Source 1: GT file [time(sec),q_GtoI,p_IinG,v_IinG,b_gyro,b_accel]
+  bool have_gt = false;
+  if (_sim == nullptr && !gt_states.empty()) {
+    have_gt = DatasetReader::get_gt_state(timestamp_inI, state_gt, gt_states);
   }
 
-  // Get the simulated groundtruth
-  // NOTE: we get the true time in the IMU clock frame
-  if (_sim != nullptr) {
+  // Source 2: Simulator
+  if (!have_gt && _sim != nullptr) {
     timestamp_inI = _app->get_state()->_timestamp + _sim->get_true_parameters().calib_camimu_dt;
-    if (!_sim->get_state(timestamp_inI, state_gt))
-      return;
+    have_gt = _sim->get_state(timestamp_inI, state_gt);
   }
+
+  // Source 3: MAVROS local position (ENU frame)
+  // NOTE: /mavros/local_position/pose follows standard ROS PoseStamped convention:
+  //       body-to-world (Hamilton q_ItoG), which is numerically identical to JPL q_GtoI.
+  //       This is DIFFERENT from /mavros/imu/data which publishes world-to-body and needs conjugation.
+  if (!have_gt && _sim == nullptr && gt_states.empty()) {
+    std::lock_guard<std::mutex> lck(mavros_gt_mtx);
+    if (have_mavros_gt) {
+      state_gt.setZero();
+      state_gt(0) = timestamp_inI;
+      // Hamilton q_ItoG from PoseStamped = JPL q_GtoI (no conjugation needed)
+      state_gt(1) = latest_mavros_gt.pose.orientation.x;
+      state_gt(2) = latest_mavros_gt.pose.orientation.y;
+      state_gt(3) = latest_mavros_gt.pose.orientation.z;
+      state_gt(4) = latest_mavros_gt.pose.orientation.w;
+      state_gt(5) = latest_mavros_gt.pose.position.x;
+      state_gt(6) = latest_mavros_gt.pose.position.y;
+      state_gt(7) = latest_mavros_gt.pose.position.z;
+      // velocity and biases left as zero (not available from MAVROS pose)
+      have_gt = true;
+    }
+  }
+
+  if (!have_gt)
+    return;
 
   // Get the GT and system state state
   Eigen::Matrix<double, 16, 1> state_ekf = _app->get_state()->_imu->value();
@@ -809,18 +1010,56 @@ void ROS2Visualizer::publish_groundtruth() {
   //==========================================================================
   //==========================================================================
 
-  // Difference between positions
-  double dx = state_ekf(4, 0) - state_gt(5, 0);
-  double dy = state_ekf(5, 0) - state_gt(6, 0);
-  double dz = state_ekf(6, 0) - state_gt(7, 0);
+  // Compute fixed frame offset on first call (OpenVINS frame ↔ MAVROS frame)
+  Eigen::Matrix<double, 4, 1> quat_gt;
+  quat_gt << state_gt(1, 0), state_gt(2, 0), state_gt(3, 0), state_gt(4, 0);
+  Eigen::Matrix3d R_GtoI_est = ov_core::quat_2_Rot(corrected_q_GtoI_ENU);
+  Eigen::Matrix3d R_GtoI_gt = ov_core::quat_2_Rot(quat_gt);
+
+  if (!gt_frame_offset_computed) {
+    // R_offset: maps R_GtoI_est → R_GtoI_gt, so R_GtoI_aligned = R_offset * R_GtoI_est
+    R_offset = R_GtoI_gt * R_GtoI_est.transpose();
+    // R_AtoB: transforms position coordinates from OpenVINS frame to MAVROS frame
+    R_AtoB = R_GtoI_gt.transpose() * R_GtoI_est;
+    p_est_init = corrected_p_ENU;
+    p_gt_init = state_gt.block(5, 0, 3, 1);
+    gt_frame_offset_computed = true;
+    PRINT_INFO(GREEN "[GT]: Frame offset computed (roll/pitch alignment)\n" RESET);
+  }
+
+  // Difference between positions (corrected ENU output vs GT)
+  Eigen::Vector3d gt_pos = state_gt.block(5, 0, 3, 1);
+  double dx = corrected_p_ENU(0) - gt_pos(0);
+  double dy = corrected_p_ENU(1) - gt_pos(1);
+  double dz = corrected_p_ENU(2) - gt_pos(2);
   double err_pos = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-  // Quaternion error
-  Eigen::Matrix<double, 4, 1> quat_gt, quat_st, quat_diff;
-  quat_gt << state_gt(1, 0), state_gt(2, 0), state_gt(3, 0), state_gt(4, 0);
-  quat_st << state_ekf(0, 0), state_ekf(1, 0), state_ekf(2, 0), state_ekf(3, 0);
+  // Quaternion error (use frame-aligned orientation)
+  Eigen::Matrix3d R_GtoI_aligned = R_offset * R_GtoI_est;
+  Eigen::Vector4d quat_aligned = ov_core::rot_2_quat(R_GtoI_aligned);
+  Eigen::Matrix<double, 4, 1> quat_st, quat_diff;
+  quat_st = quat_aligned;
   quat_diff = quat_multiply(quat_st, Inv(quat_gt));
   double err_ori = (180 / M_PI) * 2 * quat_diff.block(0, 0, 3, 1).norm();
+
+  // DEBUG: print orientations as Euler angles for diagnosis
+  {
+    Eigen::Matrix3d R_ItoG_est = R_GtoI_aligned.transpose();
+    double yaw_est = std::atan2(R_ItoG_est(1, 0), R_ItoG_est(0, 0)) * 180.0 / M_PI;
+    double pitch_est = std::asin(-R_ItoG_est(2, 0)) * 180.0 / M_PI;
+    double roll_est = std::atan2(R_ItoG_est(2, 1), R_ItoG_est(2, 2)) * 180.0 / M_PI;
+
+    Eigen::Matrix3d R_ItoG_gt = R_GtoI_gt.transpose();
+    double yaw_gt = std::atan2(R_ItoG_gt(1, 0), R_ItoG_gt(0, 0)) * 180.0 / M_PI;
+    double pitch_gt = std::asin(-R_ItoG_gt(2, 0)) * 180.0 / M_PI;
+    double roll_gt = std::atan2(R_ItoG_gt(2, 1), R_ItoG_gt(2, 2)) * 180.0 / M_PI;
+
+    static int dbg_cnt = 0;
+    if (dbg_cnt++ % 100 == 0) {
+      PRINT_INFO(CYAN "[GT DEBUG] est(rpy)=%.1f,%.1f,%.1f gt(rpy)=%.1f,%.1f,%.1f err=%.1f deg\n" RESET,
+                 roll_est, pitch_est, yaw_est, roll_gt, pitch_gt, yaw_gt, err_ori);
+    }
+  }
 
   //==========================================================================
   //==========================================================================
@@ -839,7 +1078,7 @@ void ROS2Visualizer::publish_groundtruth() {
   Eigen::Vector3d quat_diff_vec = quat_diff.block(0, 0, 3, 1);
   Eigen::Vector3d cov_vec = covariance.block(0, 0, 3, 3).inverse() * 2 * quat_diff.block(0, 0, 3, 1);
   double ori_nees = 2 * quat_diff_vec.dot(cov_vec);
-  Eigen::Vector3d errpos = state_ekf.block(4, 0, 3, 1) - state_gt.block(5, 0, 3, 1);
+  Eigen::Vector3d errpos = corrected_p_ENU - gt_pos;
   double pos_nees = errpos.transpose() * covariance.block(3, 3, 3, 3).inverse() * errpos;
 
   //==========================================================================

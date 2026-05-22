@@ -51,6 +51,7 @@ class UpdaterMSCKF;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
 class UpdaterBaro;
+class UpdaterYaw;
 class Propagator;
 
 /**
@@ -96,6 +97,12 @@ public:
    */
   void feed_measurement_simulation(double timestamp, const std::vector<int> &camids,
                                    const std::vector<std::vector<std::pair<size_t, Eigen::VectorXf>>> &feats);
+
+  /**
+   * @brief Feed function for magnetometer yaw measurements
+   * @param message Contains our timestamp and yaw angle in ENU (rad)
+   */
+  void feed_measurement_yaw(const ov_core::YawData &message);
 
   /**
    * @brief Given a state, this will initialize our IMU state.
@@ -219,6 +226,8 @@ protected:
 
   /// Queue for sequential altitude updates
   std::vector<std::pair<double, double>> baro_queue;
+  /// Our magnetometer yaw updater
+  std::shared_ptr<UpdaterYaw> updaterYaw;
 
   /// This is the queue of measurement times that have come in since we starting doing initialization
   /// After we initialize, we will want to prop & update to the latest timestamp quickly

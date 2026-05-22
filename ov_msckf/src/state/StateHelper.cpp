@@ -643,3 +643,21 @@ void StateHelper::marginalize_slam(std::shared_ptr<State> state) {
     }
   }
 }
+
+void StateHelper::inflate_covariance(std::shared_ptr<State> state, std::shared_ptr<ov_type::Type> variable, const Eigen::VectorXd &h,
+                                     double inflate_amount) {
+
+  // Get the variable's index and size in the state covariance
+  int var_id = variable->id();
+  int var_size = variable->size();
+  assert(h.rows() == var_size);
+
+  // Normalize direction
+  double h_norm_sq = h.squaredNorm();
+  if (h_norm_sq < 1e-10)
+    return;
+
+  // Add inflation along direction h: P += inflate * (h * h^T) / (h^T * h)
+  Eigen::MatrixXd P_add = inflate_amount * (h * h.transpose()) / h_norm_sq;
+  state->_Cov.block(var_id, var_id, var_size, var_size) += P_add;
+}

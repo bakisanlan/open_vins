@@ -32,6 +32,7 @@
 #include "state/Propagator.h"
 #include "state/State.h"
 #include "state/StateHelper.h"
+#include "update/UpdaterYaw.h"
 
 using namespace ov_core;
 using namespace ov_type;
@@ -136,6 +137,42 @@ bool VioManager::try_to_initialize(const ov_core::CameraData &message) {
       // If we are moving then don't do zero velocity update4
       if (state->_imu->vel().norm() > params.zupt_max_velocity) {
         has_moved_since_zupt = true;
+      }
+
+      // If we have magnetometer yaw data, align the initial orientation to ENU
+      // This rotates the arbitrary yaw from Gram-Schmidt to match the magnetometer heading
+      // NOTE: skip this in "output" mode — the visualizer handles yaw correction at publish time
+      if (updaterYaw != nullptr && updaterYaw->has_data() && params.mag_yaw_mode == "ekf") {
+        ov_core::YawData yaw_data;
+        if (updaterYaw->get_latest(yaw_data)) {
+          // Get the current (arbitrary) yaw from the initialized state
+          Eigen::Matrix3d R_GtoI = state->_imu->Rot();
+          Eigen::Matrix3d R_ItoG = R_GtoI.transpose();
+          double yaw_current = std::atan2(R_ItoG(1, 0), R_ItoG(0, 0));
+
+          // Compute the yaw correction needed
+          double delta_yaw = yaw_data.yaw - yaw_current;
+
+          // Build standard counter-clockwise rotation about z-axis (ENU global frame)
+          Eigen::Matrix3d R_correction;
+          R_correction << std::cos(delta_yaw), -std::sin(delta_yaw), 0,
+                          std::sin(delta_yaw),  std::cos(delta_yaw), 0,
+                          0,                    0,                   1;
+
+          // Apply: R_GtoI_new = R_GtoI * R_correction^T
+          // This rotates the global frame so that it aligns with ENU
+          Eigen::Matrix3d R_GtoI_new = R_GtoI * R_correction.transpose();
+          Eigen::Vector4d q_new = ov_core::rot_2_quat(R_GtoI_new);
+
+          // Update the state quaternion (keep position, velocity, biases unchanged)
+          Eigen::VectorXd imu_val = state->_imu->value();
+          imu_val.block(0, 0, 4, 1) = q_new;
+          state->_imu->set_value(imu_val);
+          state->_imu->set_fej(imu_val);
+
+          PRINT_INFO(GREEN "[init]: MAG YAW aligned to ENU, yaw_mag=%.1f deg, yaw_old=%.1f deg, delta=%.1f deg\n" RESET,
+                     yaw_data.yaw * 180.0 / M_PI, yaw_current * 180.0 / M_PI, delta_yaw * 180.0 / M_PI);
+        }
       }
 
       // Else we are good to go, print out our stats
