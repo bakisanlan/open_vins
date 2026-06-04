@@ -98,7 +98,7 @@ public:
    * @return Returns false if it fails to triangulate (based on the thresholds)
    */
   bool single_triangulation(std::shared_ptr<Feature> feat, std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
-                             double *cond_number_out = nullptr);
+                             double *cond_number_out = nullptr, double *logdet_out = nullptr);
 
   /**
    * @brief Uses a linear triangulation to get initial estimate for the feature, treating the anchor observation as a true bearing.

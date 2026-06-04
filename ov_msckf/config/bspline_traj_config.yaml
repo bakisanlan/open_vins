@@ -1,0 +1,49 @@
+##############################################################################
+# B-Spline Trajectory Generator Configuration
+#
+# Generates a smooth square trajectory using periodic cubic B-splines
+# for testing the CBF safety filter.
+#
+# Square layout (top view, starting at current position):
+#
+#   WP3 ←──────── WP2
+#    │              │
+#    │   (smooth    │
+#    │    corners)  │
+#    │              │
+#   WP0 ─────────→ WP1
+#
+# Run:
+#   ros2 run ov_msckf bspline_traj_node.py --ros-args \
+#       -r __ns:=/ov_msckf \
+#       --params-file $(ros2 pkg prefix ov_msckf --share)/config/bspline_traj_config.yaml
+##############################################################################
+
+"/**":
+  ros__parameters:
+
+    # Master enable switch
+    traj_enabled: true
+
+    # Square side length (metres)
+    side_length: 100.0
+
+    # Desired traversal speed (m/s)
+    # One full loop takes: 4 × side_length / speed  seconds
+    speed: 3.0
+
+    # Position tracking gain (proportional feedback)
+    # Higher → tighter tracking but more aggressive corrections
+    # Lower  → smoother but may lag behind the reference
+    kp: 0.5
+
+    # Control publish rate (Hz)
+    rate: 20.0
+
+    # Keep z component of velocity command at zero
+    # (altitude is managed separately by the flight controller)
+    hold_altitude: true
+
+    # Topics
+    topic_pub_cmd_vel: "/ov_msckf/cmd_vel_nom"   # goes to CBF filter → ArduPilot
+    topic_sub_odom: "/ov_msckf/odomimu"           # OpenVINS odometry

@@ -34,6 +34,8 @@
 
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/math/distributions/chi_squared.hpp>
+#include <cmath>
+#include <limits>
 
 using namespace ov_core;
 using namespace ov_type;
@@ -122,6 +124,10 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   int tri_count_cond = 0;
   double tri_max_baseline_ratio = 0.0, tri_sum_baseline_ratio = 0.0;
   int tri_count_baseline_ratio = 0;
+  // CBF logdet observability metric: ell_i = log(det(M_i)) per feature
+  double tri_sum_logdet = 0.0, tri_min_logdet = std::numeric_limits<double>::infinity();
+  double tri_max_logdet = -std::numeric_limits<double>::infinity();
+  int tri_count_logdet = 0;
 
   auto it1 = feature_vec.begin();
   while (it1 != feature_vec.end()) {
@@ -130,16 +136,26 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
     // Triangulate the feature and remove if it fails
     bool success_tri = true;
     double cond_out = 0.0;
+    double logdet_out = -std::numeric_limits<double>::infinity();
     if (initializer_feat->config().triangulate_1d) {
       success_tri = initializer_feat->single_triangulation_1d(*it1, clones_cam);
     } else {
-      success_tri = initializer_feat->single_triangulation(*it1, clones_cam, &cond_out);
+      success_tri = initializer_feat->single_triangulation(*it1, clones_cam, &cond_out, &logdet_out);
       // Accumulate condition number stats (even for failures)
       if (cond_out > 0.0) {
         tri_sum_cond += cond_out;
         tri_count_cond++;
         if (cond_out > tri_max_cond)
           tri_max_cond = cond_out;
+      }
+      // Accumulate logdet stats (even for failures, if the matrix was valid)
+      if (std::isfinite(logdet_out)) {
+        tri_sum_logdet += logdet_out;
+        tri_count_logdet++;
+        if (logdet_out < tri_min_logdet)
+          tri_min_logdet = logdet_out;
+        if (logdet_out > tri_max_logdet)
+          tri_max_logdet = logdet_out;
       }
     }
 
@@ -172,9 +188,197 @@ void UpdaterMSCKF::update(std::shared_ptr<State> state, std::vector<std::shared_
   {
     double mean_cond = (tri_count_cond > 0) ? (tri_sum_cond / tri_count_cond) : 0.0;
     double mean_baseline = (tri_count_baseline_ratio > 0) ? (tri_sum_baseline_ratio / tri_count_baseline_ratio) : 0.0;
+    double mean_logdet = (tri_count_logdet > 0) ? (tri_sum_logdet / tri_count_logdet) : 0.0;
     PRINT_INFO(MAGENTA "[TRI]: tried=%d | ok=%d | cond: max=%.1f/%.0f mean=%.1f | baseline_ratio: max=%.1f/%.0f mean=%.1f\n" RESET,
                tri_total_tried, tri_total_success, tri_max_cond, initializer_feat->config().max_cond_number, mean_cond,
                tri_max_baseline_ratio, initializer_feat->config().max_baseline, mean_baseline);
+    PRINT_INFO(CYAN "[CBF-LOGDET]: feats=%d | mean_logdet=%.4f | min_logdet=%.4f | max_logdet=%.4f\n" RESET,
+               tri_count_logdet, mean_logdet,
+               (tri_count_logdet > 0) ? tri_min_logdet : 0.0,
+               (tri_count_logdet > 0) ? tri_max_logdet : 0.0);
+  }
+
+  // ============================================================================
+  // CBF: Compute drift f(x) and control gradient g(x) in body (IMU) frame
+  //
+  //   ḣ = f(x) + g(x)ᵀ v_B
+  //
+  //   f(x) = (2/s) Σ_i Σ_{j=1..n-1}  1/(ρ_{i,j} η²) bᵀ M⁻¹ π R_{Cj}^A R_B^C v_{B,j}
+  //   g(x) = (2/s) Σ_i  1/(ρ_{i,n} η²) (R_{Cn}^A R_B^C)ᵀ π_{i,n} M⁻¹ b_{i,n}
+  //
+  // Since OpenVINS unit-normalises bearings, η = 1 and π = I - b bᵀ.
+  // R_{C_j}^A = R_AtoCi^T;  R_B^C = R_ItoC (IMU-to-camera calibration).
+  // So (R_{C_j}^A R_B^C)^T = R_ItoC^T · R_AtoCi  (anchor → body).
+  // ============================================================================
+  _cbf_output = CbfOutput(); // reset
+  if (!feature_vec.empty() && tri_count_logdet > 0) {
+    // IMU-to-camera rotation for the first camera (cam 0)
+    const Eigen::Matrix3d R_ItoC = state->_calib_IMUtoCAM.at(0)->Rot();  // R_B^C
+    const Eigen::Matrix3d R_CtoI = R_ItoC.transpose();                   // (R_B^C)^T
+
+    // ── Estimate past velocities from clone positions ──
+    // Clone times are sorted in ascending order (std::map)
+    // v_{G,j} ≈ (p_{j+1} - p_j) / Δt, then v_{B,j} = R_GtoI_j · v_{G,j}
+    struct CloneVel {
+      double time;
+      Eigen::Vector3d v_body;   // velocity in body (IMU) frame
+      bool is_current;          // true for the latest (current) pose
+    };
+    std::vector<CloneVel> clone_vels;
+    {
+      std::vector<std::pair<double, std::shared_ptr<ov_type::PoseJPL>>> sorted_clones(
+          state->_clones_IMU.begin(), state->_clones_IMU.end());
+
+      for (size_t idx = 0; idx < sorted_clones.size(); idx++) {
+        double t_j = sorted_clones[idx].first;
+        bool is_last = (idx == sorted_clones.size() - 1);
+
+        Eigen::Vector3d v_body;
+        if (is_last) {
+          // Current pose: use the EKF's estimated velocity directly
+          // state->_imu->vel() is v_IinG (global frame)
+          Eigen::Matrix3d R_GtoI_j = sorted_clones[idx].second->Rot();
+          v_body = R_GtoI_j * state->_imu->vel();
+        } else {
+          // Past pose: numerical differentiation of global positions
+          double t_next = sorted_clones[idx + 1].first;
+          double dt = t_next - t_j;
+          if (dt < 1e-9) dt = 1e-9; // guard against division by zero
+          Eigen::Vector3d p_j = sorted_clones[idx].second->pos();
+          Eigen::Vector3d p_next = sorted_clones[idx + 1].second->pos();
+          Eigen::Vector3d v_global = (p_next - p_j) / dt;
+          Eigen::Matrix3d R_GtoI_j = sorted_clones[idx].second->Rot();
+          v_body = R_GtoI_j * v_global;
+        }
+        clone_vels.push_back({t_j, v_body, is_last});
+      }
+    }
+
+    // Build a lookup: clone_time → index in clone_vels
+    std::unordered_map<double, size_t> time_to_idx;
+    for (size_t i = 0; i < clone_vels.size(); i++) {
+      time_to_idx[clone_vels[i].time] = i;
+    }
+
+    Eigen::Vector3d g_sum = Eigen::Vector3d::Zero();  // control gradient accumulator
+    double f_sum = 0.0;                                // drift accumulator
+    int s = 0; // number of valid features
+
+    for (const auto &feat : feature_vec) {
+      // Get anchor pose
+      auto anchorclone = clones_cam.at(feat->anchor_cam_id).at(feat->anchor_clone_timestamp);
+      const Eigen::Matrix3d &R_GtoA = anchorclone.Rot();
+      const Eigen::Vector3d &p_AinG = anchorclone.pos();
+
+      // 1. Build information matrix M_i = Σ_j π_{i,j}
+      Eigen::Matrix3d M_i = Eigen::Matrix3d::Zero();
+      struct BearingEntry {
+        Eigen::Vector3d b;
+        Eigen::Matrix3d R_AtoCi;
+        Eigen::Vector3d p_CiinA;
+        double clone_time;       // timestamp of this clone
+      };
+      std::vector<BearingEntry> entries;
+
+      for (const auto &pair : feat->timestamps) {
+        for (size_t m = 0; m < pair.second.size(); m++) {
+          const Eigen::Matrix3d &R_GtoCi = clones_cam.at(pair.first).at(pair.second.at(m)).Rot();
+          const Eigen::Vector3d &p_CiinG = clones_cam.at(pair.first).at(pair.second.at(m)).pos();
+
+          Eigen::Matrix3d R_AtoCi = R_GtoCi * R_GtoA.transpose();
+          Eigen::Vector3d p_CiinA = R_GtoA * (p_CiinG - p_AinG);
+
+          // Bearing in anchor frame (unit-normalized)
+          Eigen::Vector3d b_i;
+          b_i << feat->uvs_norm.at(pair.first).at(m)(0), feat->uvs_norm.at(pair.first).at(m)(1), 1;
+          b_i = R_AtoCi.transpose() * b_i;
+          b_i = b_i / b_i.norm(); // η = 1
+
+          Eigen::Matrix3d pi_j = Eigen::Matrix3d::Identity() - b_i * b_i.transpose();
+          M_i += pi_j;
+
+          entries.push_back({b_i, R_AtoCi, p_CiinA, pair.second.at(m)});
+        }
+      }
+
+      // 2. Check if M_i is invertible
+      Eigen::JacobiSVD<Eigen::Matrix3d> svd_Mi(M_i, Eigen::ComputeFullU | Eigen::ComputeFullV);
+      double lambda_min = svd_Mi.singularValues()(2);
+      if (lambda_min < 1e-8)
+        continue; // rank-deficient, skip this feature
+
+      Eigen::Matrix3d M_inv = svd_Mi.solve(Eigen::Matrix3d::Identity());
+
+      // 3. Split contributions: g(x) from current pose, f(x) from past poses
+      Eigen::Vector3d g_feat = Eigen::Vector3d::Zero();
+      double f_feat = 0.0;
+
+      for (const auto &e : entries) {
+        double rho = (feat->p_FinA - e.p_CiinA).norm(); // Euclidean depth
+        if (rho < 1e-6)
+          continue;
+
+        Eigen::Matrix3d pi_j = Eigen::Matrix3d::Identity() - e.b * e.b.transpose();
+
+        // Check if this entry belongs to the current (latest) pose
+        auto it_vel = time_to_idx.find(e.clone_time);
+        bool is_current_pose = false;
+        if (it_vel != time_to_idx.end()) {
+          is_current_pose = clone_vels[it_vel->second].is_current;
+        }
+
+        if (is_current_pose) {
+          // ── g(x): control gradient (body frame) ──
+          // g_i = (2/ρ) (R_{Cn}^A R_B^C)^T π M^{-1} b
+          Eigen::Vector3d pi_Minv_b = pi_j * M_inv * e.b;
+          Eigen::Matrix3d R_AtoBody = R_CtoI * e.R_AtoCi;
+          g_feat += (1.0 / rho) * R_AtoBody * pi_Minv_b;
+        } else if (it_vel != time_to_idx.end()) {
+          // ── f(x): drift from past pose ──
+          // f_i += (2/ρ) bᵀ M^{-1} π R_{Cj}^A R_B^C v_{B,j}
+          const Eigen::Vector3d &v_body_j = clone_vels[it_vel->second].v_body;
+          // R_{Cj}^A · R_B^C · v_{B,j} = R_AtoCi^T · R_ItoC · v_{B,j}
+          Eigen::Vector3d vel_in_anchor = e.R_AtoCi.transpose() * R_ItoC * v_body_j;
+          Eigen::Vector3d Minv_pi_vel = M_inv * pi_j * vel_in_anchor;
+          double contrib = e.b.dot(Minv_pi_vel);
+          f_feat += (1.0 / rho) * contrib;
+        }
+      }
+      g_feat *= 2.0;
+      f_feat *= 2.0;
+
+      g_sum += g_feat;
+      f_sum += f_feat;
+      s++;
+    }
+
+    if (s > 0) {
+      double raw_logdet = tri_sum_logdet / tri_count_logdet;
+      Eigen::Vector3d raw_g = g_sum / s;
+      double raw_drift = f_sum / s;
+
+      // Apply EMA smoothing (weight alpha by feature count for stability)
+      if (!_ema_initialized) {
+        _ema_logdet = raw_logdet;
+        _ema_g = raw_g;
+        _ema_drift = raw_drift;
+        _ema_initialized = true;
+      } else {
+        double alpha = std::min(1.0, _ema_alpha * (s / 10.0));
+        _ema_logdet = alpha * raw_logdet + (1.0 - alpha) * _ema_logdet;
+        _ema_g = alpha * raw_g + (1.0 - alpha) * _ema_g;
+        _ema_drift = alpha * raw_drift + (1.0 - alpha) * _ema_drift;
+      }
+
+      _cbf_output.mean_logdet = _ema_logdet;
+      _cbf_output.g_vec = _ema_g;
+      _cbf_output.drift = _ema_drift;
+      _cbf_output.num_features = s;
+      _cbf_output.valid = true;
+
+      PRINT_INFO(CYAN "[CBF]: feats=%d | logdet=%.4f | drift=%.6f | g=[%.6f, %.6f, %.6f]\n" RESET,
+                 s, _ema_logdet, _ema_drift, _cbf_output.g_vec(0), _cbf_output.g_vec(1), _cbf_output.g_vec(2));
+    }
   }
 
   // Calculate the max possible measurement size

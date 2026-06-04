@@ -32,6 +32,7 @@
 #include <string>
 
 #include "VioManagerOptions.h"
+#include "update/UpdaterMSCKF.h"
 
 namespace ov_core {
 struct ImuData;
@@ -47,7 +48,6 @@ namespace ov_msckf {
 
 class State;
 class StateHelper;
-class UpdaterMSCKF;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
 class Propagator;
@@ -121,6 +121,12 @@ public:
 
   /// Returns 3d features used in the last update in global frame
   std::vector<Eigen::Vector3d> get_good_features_MSCKF() { return good_features_MSCKF; }
+
+  /// Returns the latest CBF observability metrics from the MSCKF updater
+  UpdaterMSCKF::CbfOutput get_cbf_output();
+
+  /// Set the EMA smoothing factor for CBF logdet/psi
+  void set_cbf_ema_alpha(double alpha) { updaterMSCKF->set_ema_alpha(alpha); }
 
   /// Return the image used when projecting the active tracks
   void get_active_image(double &timestamp, cv::Mat &image) {

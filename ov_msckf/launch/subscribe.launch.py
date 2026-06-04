@@ -74,6 +74,11 @@ def launch_setup(context):
                         config_path)
                     )
             ]
+    # CBF config file (shared by C++ and Python nodes)
+    cbf_config_path = os.path.join(
+        get_package_share_directory("ov_msckf"), "config", "cbf_config.yaml"
+    )
+
     node1 = Node(
         package="ov_msckf",
         executable="run_subscribe_msckf",
@@ -86,7 +91,7 @@ def launch_setup(context):
             {"max_cameras": LaunchConfiguration("max_cameras")},
             {"save_total_state": LaunchConfiguration("save_total_state")},
             {"config_path": config_path},
-        ],
+        ] + ([cbf_config_path] if os.path.isfile(cbf_config_path) else []),
     )
 
     node2 = Node(
@@ -104,7 +109,32 @@ def launch_setup(context):
             ],
     )
 
-    return [node1, node2]
+    # CBF safety filter node (Python) — run separately for debug visibility:
+    #   ros2 run ov_msckf cbf_safety_filter_node.py --ros-args \
+    #       -r __ns:=/ov_msckf --params-file <path-to>/cbf_config.yaml
+    # node3 = Node(
+    #     package="ov_msckf",
+    #     executable="cbf_safety_filter_node.py",
+    #     name="cbf_safety_filter",
+    #     namespace=LaunchConfiguration("namespace"),
+    #     output='screen',
+    #     parameters=[cbf_config_path] if os.path.isfile(cbf_config_path) else [],
+    # )
+
+    # Square trajectory generator node (Python)
+    traj_config_path = os.path.join(
+        get_package_share_directory("ov_msckf"), "config", "traj_config.yaml"
+    )
+    node4 = Node(
+        package="ov_msckf",
+        executable="square_traj_node.py",
+        name="square_traj",
+        namespace=LaunchConfiguration("namespace"),
+        output='screen',
+        parameters=[traj_config_path] if os.path.isfile(traj_config_path) else [],
+    )
+
+    return [node1, node2, node4]
 
 
 def generate_launch_description():

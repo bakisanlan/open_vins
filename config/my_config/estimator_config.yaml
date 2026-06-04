@@ -5,7 +5,7 @@ verbosity: "INFO" # ALL, DEBUG, INFO, WARNING, ERROR, SILENT
 use_fej: true # if first-estimate Jacobians should be used (enable for good consistency)
 integration: "rk4" # discrete, rk4, analytical (if rk4 or analytical used then analytical covariance propagation is used)
 use_stereo: false # if we have more than 1 camera, if we should try to track stereo constraints between pairs
-max_cameras: 2 # how many cameras we have 1 = mono, 2 = stereo, >2 = binocular (all mono tracking)
+max_cameras: 1 # how many cameras we have 1 = mono, 2 = stereo, >2 = binocular (all mono tracking)
 
 calib_cam_extrinsics: true # if the transform between camera and IMU should be optimized R_ItoC, p_CinI
 calib_cam_intrinsics: true # if camera intrinsics should be optimized (focal, center, distortion)
@@ -32,7 +32,7 @@ feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
 try_zupt: true
 zupt_chi2_multipler: 3 # set to 0 for only disp-based
 zupt_max_velocity: 0.2
-zupt_noise_multiplier: 10
+zupt_noise_multiplier: 1
 zupt_max_disparity: 0 # set to 0 for only imu-based
 zupt_only_at_beginning: true
 
@@ -118,7 +118,7 @@ up_aruco_sigma_px: 1
 up_aruco_chi2_multipler: 1
 
 # masks for our images
-use_mask: true
+use_mask: false
 mask0: "fisheyemask_960-540.png" #relative to current file
 
 # imu and camera spacial-temporal

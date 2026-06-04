@@ -111,6 +111,16 @@ install(TARGETS test_sim_repeat DESTINATION lib/${PROJECT_NAME})
 # Install launch and config directories
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch/)
 install(DIRECTORY ../config/ DESTINATION share/${PROJECT_NAME}/config/)
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config/)
+
+# Install Python scripts as executables
+install(PROGRAMS
+  scripts/cbf_safety_filter_node.py
+  scripts/square_traj_node.py
+  scripts/bspline_traj_node.py
+  scripts/keyboard_joy_node.py
+  scripts/plot_cbf_log.py
+  DESTINATION lib/${PROJECT_NAME})
 
 # finally define this as the package
 ament_package()

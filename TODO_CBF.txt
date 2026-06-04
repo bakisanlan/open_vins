@@ -1,0 +1,18 @@
+---Latest version---
+*We observed that CBF is working which means, it try to enhance triangulation in some way.
+*It finds v* near to nominal input which v_nom = [5, 0 ,0] --> v* = [7*, 0 ,0] ,  we see that it increase the velocity alogn the direction v_nom
+*in the following direction of velocity ; -x, +x, xy, y, those are tried, succeeded.
+
+
+--Problems--
+*Check LOGDET, it is wrong sometimes, even though there are triangulation it is very low
+*despite CBF increase velocity, we do not observe meaningful changes on LOGDET, done(gamma)
+*Interestingly, CBF safe velociy is decreased when AGL decreases, but alt is constant, done(psuedo problem)
+*There is a inconsistensy direction(x y inverse) of velocity that given by CBF and nominal, but somehow drone moves on the nominal velocity direction, done(psuedo problem)
+
+
+**TODO**
+-check quad error, done
+-change ground with feature rich texture(ITU sat jpeg), done
+-
+

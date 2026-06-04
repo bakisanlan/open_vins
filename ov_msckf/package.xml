@@ -49,6 +49,7 @@
     <depend condition="$ROS_VERSION == 2">image_transport</depend>
     <depend condition="$ROS_VERSION == 2">ov_core</depend>
     <depend condition="$ROS_VERSION == 2">ov_init</depend>
+    <exec_depend condition="$ROS_VERSION == 2">rclpy</exec_depend>
 
     <!-- System dependencies for both versions -->
     <depend>eigen</depend>

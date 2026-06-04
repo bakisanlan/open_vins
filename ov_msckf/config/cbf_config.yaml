@@ -1,0 +1,101 @@
+##############################################################################
+# CBF (Control Barrier Function) Safety Filter Configuration
+#
+# These parameters control the log-det observability safety filter that
+# prevents triangulation failure during high-altitude / low-speed flight.
+##############################################################################
+
+"/**":
+  ros__parameters:
+
+    # CBF master enable switch
+    cbf_enabled: true
+
+    # Class-K decay rate γ (gamma).
+    # Higher values → more aggressive correction (faster return to safe set).
+    # Typical range: 0.1 – 5.0
+    cbf_gamma: 1.0
+    # Minimum log-det threshold h_min.
+    # The barrier function is h(x) = ℓ̄(x) − h_min.
+    # If ℓ̄ (mean log-det of information matrices) drops below h_min,
+    # the CBF will intervene to push it back up.
+    # Tune this from runtime data: run OpenVINS in a safe scenario,
+    # observe the [CBF-LOGDET] printout, and set h_min slightly below
+    # the typical mean_logdet values.
+    cbf_h_min: -2.5
+
+    # EMA smoothing factor for logdet, g(x), and drift.
+    # Lower values → more smoothing (less responsive, less noisy).
+    # The effective alpha is scaled by (num_features / 10), so
+    # frames with few features are automatically trusted less.
+    # Range: 0.01 – 1.0"
+    cbf_ema_alpha: 0.01
+
+    # Diagonal weight matrix W = diag(w1, w2, w3) for the CBF-QP.
+    # The QP minimises (v - v_nom)^T W (v - v_nom) subject to the CBF constraint.
+    #
+    # Larger weight → less correction in that axis.
+    # Set w3 very large (e.g. 1e6) to prevent CBF from changing the z-velocity
+    # (altitude rate), so only lateral corrections are applied.
+    #
+    # W = I  is the standard minimum-norm projection (Eq. closed_form_average).
+    cbf_w1: 1.0
+    cbf_w2: 1.0
+    cbf_w3: 1000000.0
+
+    # Output velocity smoothing (EMA low-pass filter on v_safe).
+    # Prevents jumpy commands from logdet/g discontinuities due to
+    # feature turnover in the sliding window.
+    #   1.0 = no smoothing (raw CBF output)
+    #   0.3 = moderate smoothing (default, good balance)
+    #   0.1 = very smooth (may lag behind fast changes)
+    cbf_output_alpha: 0.1
+
+    # Minimum SLAM feature count guard.
+    # If the number of visible SLAM features drops below this threshold,
+    # CBF forces v_safe = 0 (emergency stop) regardless of the margin.
+    # Set to -1 to disable this guard entirely.
+    cbf_min_features: 10
+
+    # Live plot enable/disable.
+    # Set to false for maximum CBF publish rate (no GUI overhead).
+    plot_enabled: true
+
+    # Per-panel visibility (only active when plot_enabled: true)
+    plot_show_logdet: true       # log-det metric + ||v_est||
+    plot_show_g: false           # g(x) control gradient components
+    plot_show_velocity: true     # v_safe vs v_nom
+    plot_show_features: false    # feature count
+
+    # Sliding time window for the live plot (seconds)
+    plot_window_sec: 5.0
+
+    ############################################################################
+    # Data Logging Configuration
+    ############################################################################
+
+    # Enable/disable CSV data logging (creates a new file each run)
+    log_enabled: true
+
+    # Directory where log files are saved (~ is expanded to home)
+    log_directory: "~/cbf_logs"
+
+    ############################################################################
+    # Topic Configuration
+    ############################################################################
+
+    # Subscription topics (from OpenVINS)
+    topic_sub_mean_logdet: "cbf/mean_logdet"
+    topic_sub_g: "cbf/g"
+    topic_sub_drift: "cbf/drift"
+    topic_sub_odom: "odomimu"
+    topic_sub_num_features: "cbf/num_features"
+    # Nominal velocity from upstream guidance (geometry_msgs/TwistStamped, body frame)
+    topic_sub_cmd_vel_nom: "cmd_vel_nom"
+
+    # Publication topics (CBF outputs)
+    topic_pub_v_safe: "cbf/v_safe"
+    topic_pub_active: "cbf/active"
+    topic_pub_barrier: "cbf/barrier"
+    # Safe velocity command forwarded to ArduPilot flight controller
+    topic_pub_cmd_vel_ap: "/ap/cmd_vel"

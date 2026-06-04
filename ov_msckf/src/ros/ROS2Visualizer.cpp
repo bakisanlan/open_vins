@@ -80,6 +80,16 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   it_pub_loop_img_depth = it.advertise("loop_depth", 2);
   it_pub_loop_img_depth_color = it.advertise("loop_depth_colored", 2);
 
+  // CBF observability publishers
+  pub_cbf_mean_logdet = node->create_publisher<std_msgs::msg::Float64>("cbf/mean_logdet", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_cbf_mean_logdet->get_topic_name());
+  pub_cbf_g = node->create_publisher<geometry_msgs::msg::Vector3Stamped>("cbf/g", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_cbf_g->get_topic_name());
+  pub_cbf_drift = node->create_publisher<std_msgs::msg::Float64>("cbf/drift", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_cbf_drift->get_topic_name());
+  pub_cbf_num_features = node->create_publisher<std_msgs::msg::Float64>("cbf/num_features", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_cbf_num_features->get_topic_name());
+
   // option to enable publishing of global to IMU transformation
   if (node->has_parameter("publish_global_to_imu_tf")) {
     node->get_parameter<bool>("publish_global_to_imu_tf", publish_global2imu_tf);
@@ -87,6 +97,15 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   if (node->has_parameter("publish_calibration_tf")) {
     node->get_parameter<bool>("publish_calibration_tf", publish_calibration_tf);
   }
+
+  // CBF EMA smoothing factor (read from ROS params / cbf_config.yaml)
+  if (!node->has_parameter("cbf_ema_alpha")) {
+    node->declare_parameter<double>("cbf_ema_alpha", 0.1);
+  }
+  double cbf_ema_alpha = 0.1;
+  node->get_parameter("cbf_ema_alpha", cbf_ema_alpha);
+  _app->set_cbf_ema_alpha(cbf_ema_alpha);
+  PRINT_INFO("CBF EMA alpha set to: %.3f\n", cbf_ema_alpha);
 
   // Load groundtruth if we have it and are not doing simulation
   // NOTE: needs to be a csv ASL format file
@@ -245,6 +264,37 @@ void ROS2Visualizer::visualize() {
 
   // publish state
   publish_state();
+
+  // Publish CBF observability metrics
+  {
+    auto cbf = _app->get_cbf_output();
+    if (cbf.valid) {
+      // Publish mean logdet
+      std_msgs::msg::Float64 logdet_msg;
+      logdet_msg.data = cbf.mean_logdet;
+      pub_cbf_mean_logdet->publish(logdet_msg);
+
+      // Publish g(x) control gradient vector in body (IMU) frame
+      geometry_msgs::msg::Vector3Stamped g_msg;
+      double t_ItoC = _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
+      g_msg.header.stamp = ROSVisualizerHelper::get_time_from_seconds(_app->get_state()->_timestamp + t_ItoC);
+      g_msg.header.frame_id = "imu";
+      g_msg.vector.x = cbf.g_vec(0);
+      g_msg.vector.y = cbf.g_vec(1);
+      g_msg.vector.z = cbf.g_vec(2);
+      pub_cbf_g->publish(g_msg);
+
+      // Publish f(x) drift from past poses
+      std_msgs::msg::Float64 drift_msg;
+      drift_msg.data = cbf.drift;
+      pub_cbf_drift->publish(drift_msg);
+
+      // Publish number of features used
+      std_msgs::msg::Float64 nfeat_msg;
+      nfeat_msg.data = static_cast<double>(cbf.num_features);
+      pub_cbf_num_features->publish(nfeat_msg);
+    }
+  }
 
   // publish points
   publish_features();
