@@ -43,7 +43,11 @@ mag_yaw_mode: "output"         #"ekf" | "output"  # "ekf" = Kalman update; "outp
 mag_yaw_sigma: 0.200           # ~5 degrees std dev
 mag_yaw_chi2_multipler: 1.0    # chi2 rejection multiplier
 mag_yaw_update_rate: 10.0      # Hz throttle rate
-mag_yaw_topic: "/imu"
+mag_yaw_topic: "/mavros/imu/data"
+
+# Home position (lat/lon for GPS origin and ArduPilot home, altitude from barometer MSL)
+home_latitude: 45.1006384902323
+home_longitude: 29.02551275632911
 
 # ==================================================================
 # ==================================================================
