@@ -49,6 +49,8 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   PRINT_DEBUG("Publishing: %s\n", pub_poseimu->get_topic_name());
   pub_fakegps_vision = node->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/vision_pose/pose", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_fakegps_vision->get_topic_name());
+  pub_fakegps_vision_cov = node->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/mavros/vision_pose/pose_cov32", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_fakegps_vision_cov->get_topic_name());
   pub_odomimu = node->create_publisher<nav_msgs::msg::Odometry>("odomimu", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_odomimu->get_topic_name());
   pub_pathimu = node->create_publisher<nav_msgs::msg::Path>("pathimu", 2);
@@ -247,9 +249,63 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
         std::bind(&ROS2Visualizer::callback_mavros_gt, this, std::placeholders::_1));
     PRINT_INFO("subscribing to MAVROS GT: %s\n", topic_mavros_gt.c_str());
   }
+
+  // Read home lat/lon from config (used for setting GPS origin and home on first baro reading)
+  parser->parse_config("home_latitude", home_latitude, false);
+  parser->parse_config("home_longitude", home_longitude, false);
+  PRINT_INFO("Home position: lat=%.10f, lon=%.10f\n", home_latitude, home_longitude);
+
+  // Create publisher for GPS origin and service client for set_home
+  pub_gp_origin = _node->create_publisher<geographic_msgs::msg::GeoPointStamped>("/mavros/global_position/set_gp_origin", 2);
+  srv_set_home = _node->create_client<mavros_msgs::srv::CommandHome>("/mavros/cmd/set_home");
 }
 
 void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::SharedPtr msg) {
+
+  double pressure = msg->fluid_pressure; // in Pascals
+
+  // On the very first baro reading, compute MSL altitude and set GPS origin + home
+  if (!origin_home_set) {
+    origin_home_set = true;
+
+    // Compute MSL altitude from barometric formula using standard sea-level pressure (101325 Pa)
+    double altitude_msl = 0.0; // TODO: was 44330.0 * (1.0 - std::pow(pressure / 101325.0, 1.0 / 5.255));
+    PRINT_INFO(CYAN "[BARO]: First reading %.2f Pa -> MSL altitude %.2f m\n" RESET, pressure, altitude_msl);
+
+    // Publish GPS origin
+    geographic_msgs::msg::GeoPointStamped origin_msg;
+    origin_msg.header.stamp = _node->now();
+    origin_msg.header.frame_id = "map";
+    origin_msg.position.latitude = home_latitude;
+    origin_msg.position.longitude = home_longitude;
+    origin_msg.position.altitude = altitude_msl;
+    pub_gp_origin->publish(origin_msg);
+    PRINT_INFO(CYAN "[BARO]: Published GPS origin: lat=%.10f, lon=%.10f, alt=%.2f\n" RESET,
+               home_latitude, home_longitude, altitude_msl);
+
+    // Call set_home service asynchronously
+    auto request = std::make_shared<mavros_msgs::srv::CommandHome::Request>();
+    request->current_gps = false;
+    request->yaw = 0.0;
+    request->latitude = home_latitude;
+    request->longitude = home_longitude;
+    request->altitude = altitude_msl;
+    if (srv_set_home->wait_for_service(std::chrono::seconds(2))) {
+      auto future = srv_set_home->async_send_request(request,
+          [this](rclcpp::Client<mavros_msgs::srv::CommandHome>::SharedFuture result) {
+            auto response = result.get();
+            if (response->success) {
+              PRINT_INFO(CYAN "[BARO]: Set home succeeded\n" RESET);
+            } else {
+              PRINT_WARNING(YELLOW "[BARO]: Set home failed, result=%d\n" RESET, response->result);
+            }
+          });
+      PRINT_INFO(CYAN "[BARO]: Set home request sent: lat=%.10f, lon=%.10f, alt=%.2f\n" RESET,
+                 home_latitude, home_longitude, altitude_msl);
+    } else {
+      PRINT_WARNING(YELLOW "[BARO]: /mavros/cmd/set_home service not available, skipping\n" RESET);
+    }
+  }
 
   // Don't process baro until VIO is initialized so both share the same z=0 origin
   if (!_app->initialized())
@@ -258,7 +314,6 @@ void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::Shared
   // Use VIO state timestamp (not ROS header stamp) because MAVROS baro uses
   // wall-clock time while OpenVINS uses Gazebo sim time — they don't match.
   double timestamp = _app->get_state()->_timestamp;
-  double pressure = msg->fluid_pressure; // in Pascals
 
   // Store the first pressure reading AFTER VIO init as the reference
   if (baro_ref_pressure < 0) {
@@ -294,8 +349,43 @@ void ROS2Visualizer::visualize() {
     publish_images();
 
   // Return if we have not inited
-  if (!_app->initialized())
+  // But still publish a default identity pose on the vision topic so MAVROS always gets data
+  if (!_app->initialized()) {
+    geometry_msgs::msg::PoseStamped pose_default;
+    pose_default.header.stamp = _node->now();
+    pose_default.header.frame_id = "map";
+    pose_default.pose.position.x = 0.0;
+    pose_default.pose.position.y = 0.0;
+    pose_default.pose.position.z = 0.0;
+    // Use latest AHRS orientation (roll+pitch+yaw) if available, otherwise identity
+    {
+      std::lock_guard<std::mutex> lck(mag_yaw_mtx);
+      if (have_mag_yaw) {
+        pose_default.pose.orientation.x = latest_imu_orientation(0);
+        pose_default.pose.orientation.y = latest_imu_orientation(1);
+        pose_default.pose.orientation.z = latest_imu_orientation(2);
+        pose_default.pose.orientation.w = latest_imu_orientation(3);
+      } else {
+        pose_default.pose.orientation.x = 0.0;
+        pose_default.pose.orientation.y = 0.0;
+        pose_default.pose.orientation.z = 0.0;
+        pose_default.pose.orientation.w = 1.0;
+      }
+    }
+    pub_fakegps_vision->publish(pose_default);
+
+    // Also publish default pose_cov with high covariance (not yet initialized)
+    geometry_msgs::msg::PoseWithCovarianceStamped pose_cov_default;
+    pose_cov_default.header = pose_default.header;
+    pose_cov_default.pose.pose = pose_default.pose;
+    for (int i = 0; i < 36; i++)
+      pose_cov_default.pose.covariance[i] = 0.0;
+    // Set large diagonal covariance to indicate low confidence
+    for (int i = 0; i < 6; i++)
+      pose_cov_default.pose.covariance[6 * i + i] = 99.0;
+    pub_fakegps_vision_cov->publish(pose_cov_default);
     return;
+  }
 
   // Save the start time of this dataset
   if (!start_time_set) {
@@ -653,9 +743,9 @@ void ROS2Visualizer::callback_mag_yaw(const sensor_msgs::msg::Imu::SharedPtr msg
   // Extract quaternion from the IMU topic
   // NOTE: The /imu topic publishes q_world_to_body (inverse convention).
   // We conjugate (negate x,y,z) to get q_body_to_world for yaw extraction.
-  double qx = -msg->orientation.x;
-  double qy = -msg->orientation.y;
-  double qz = -msg->orientation.z;
+  double qx = msg->orientation.x;
+  double qy = msg->orientation.y;
+  double qz = msg->orientation.z;
   double qw = msg->orientation.w;
 
   // Skip if quaternion is all zeros (no orientation data)
@@ -682,10 +772,11 @@ void ROS2Visualizer::callback_mag_yaw(const sensor_msgs::msg::Imu::SharedPtr msg
   // Feed to VioManager
   _app->feed_measurement_yaw(data);
 
-  // Store for output-mode yaw correction
+  // Store for output-mode yaw correction and pre-init orientation
   {
     std::lock_guard<std::mutex> lck(mag_yaw_mtx);
     latest_mag_yaw = yaw_enu;
+    latest_imu_orientation = Eigen::Vector4d(qx, qy, qz, qw);
     have_mag_yaw = true;
   }
 
@@ -832,6 +923,18 @@ void ROS2Visualizer::publish_state() {
   pose_enu.pose.orientation.z = q_GtoI_ENU(2);
   pose_enu.pose.orientation.w = q_GtoI_ENU(3);
   pub_fakegps_vision->publish(pose_enu);
+
+  // Publish ENU pose with covariance to MAVROS vision_pose/pose_cov topic
+  geometry_msgs::msg::PoseWithCovarianceStamped pose_enu_cov;
+  pose_enu_cov.header = pose_enu.header;
+  pose_enu_cov.pose.pose = pose_enu.pose;
+  // Fill the 6x6 covariance (position then orientation, in ENU frame)
+  for (int r = 0; r < 6; r++) {
+    for (int c = 0; c < 6; c++) {
+      pose_enu_cov.pose.covariance[6 * r + c] = covariance_posori(r, c);
+    }
+  }
+  pub_fakegps_vision_cov->publish(pose_enu_cov);
 
   //=========================================================
   //=========================================================

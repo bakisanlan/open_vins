@@ -41,6 +41,8 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <geographic_msgs/msg/geo_point_stamped.hpp>
+#include <mavros_msgs/srv/command_home.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/transform_datatypes.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
@@ -161,6 +163,7 @@ protected:
   image_transport::Publisher it_pub_tracks, it_pub_loop_img_depth, it_pub_loop_img_depth_color;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_poseimu;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_fakegps_vision;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_fakegps_vision_cov;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odomimu;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_pathimu;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_points_msckf, pub_points_slam, pub_points_aruco, pub_points_sim;
@@ -187,6 +190,7 @@ protected:
   Eigen::Vector3d prev_filter_position = Eigen::Vector3d::Zero();
   double latest_mag_yaw = 0.0;
   bool have_mag_yaw = false;
+  Eigen::Vector4d latest_imu_orientation = Eigen::Vector4d(0.0, 0.0, 0.0, 1.0); // [x, y, z, w] from AHRS
   std::mutex mag_yaw_mtx;
 
   // Corrected output state for GT error comparison (populated in publish_state)
@@ -254,6 +258,13 @@ protected:
 
   // Barometer reference pressure (first reading) for relative altitude
   double baro_ref_pressure = -1.0;
+
+  // GPS origin and home setup (triggered once on first baro reading)
+  bool origin_home_set = false;
+  double home_latitude = 41.1006384902323;
+  double home_longitude = 29.02551275632911;
+  rclcpp::Publisher<geographic_msgs::msg::GeoPointStamped>::SharedPtr pub_gp_origin;
+  rclcpp::Client<mavros_msgs::srv::CommandHome>::SharedPtr srv_set_home;
 };
 
 } // namespace ov_msckf
