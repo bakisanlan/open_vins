@@ -1,0 +1,1166 @@
+\documentclass[journal]{IEEEtran}
+
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage[caption=false,font=footnotesize]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage[backend=biber,style=ieee]{biblatex}
+\addbibresource{references.bib}
+\DeclareBibliographyCategory{cited}
+\AtEveryCitekey{\addtocategory{cited}{\thefield{entrykey}}}
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+\usepackage{graphicx}
+\usepackage{comment}                              
+\usepackage[super]{nth}
+\newcommand\norm[1]{\lVert#1\rVert}
+\usepackage[version=4]{mhchem}
+\usepackage[utf8]{inputenc}
+\usepackage{siunitx}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{longtable,tabularx}
+\usepackage{bm}
+\usepackage{commath}
+\usepackage{thmtools}
+\usepackage{mdframed}
+
+\usepackage{longtable,tabularx}
+
+\usepackage{comment}
+\usepackage[super]{nth}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}{Remark}[section]
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{assumption}{Assumption}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+\newtheorem{scenario}{Scenario}[section]
+
+\usepackage{hyperref}
+
+\usepackage{lipsum}
+
+\renewcommand\qedsymbol{QED}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\SO}{\mathrm{SO}(3)}
+\newcommand{\Stwo}{\mathcal{S}^{2}}
+\newcommand{\bzero}{\bm{0}}
+\newcommand{\bv}{\bm{v}}
+\newcommand{\bo}{\bm{\omega}}
+\newcommand{\bu}{\bm{u}}
+\newcommand{\bb}{\bm{b}}
+\newcommand{\bp}{\bm{p}}
+\newcommand{\bR}{\bm{R}}
+\newcommand{\bI}{\bm{I}}
+\newcommand{\bM}{\bm{M}}
+\newcommand{\bPsi}{\bm{\Psi}}
+\newcommand{\sx}[1]{[#1]_{\times}}
+\newcommand{\logdet}{\log\det}
+\newcommand{\Tr}{\operatorname{tr}}
+\newcommand{\bij}{\bm{b}_{i,j}}
+\newcommand{\bhij}{\hat{\bm{b}}_{i,j}}
+\newcommand{\pij}{\bm{\pi}_{i,j}}
+\newcommand{\Mii}{\bm{M}_{i}}
+\newcommand{\ellii}{\ell_i}
+
+\ifCLASSINFOpdf
+\else
+\fi
+
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\begin{document}
+
+\title{TANGO-VIO: Triangulation-Aware Navigation with Guaranteed Observability for Visual-Inertial Odometry}
+
+\author{Abdülbaki Şanlan,
+        Ege C. Altunkaya,
+        Emre Koyuncu~\IEEEmembership{Member,~IEEE} and~İbrahim Özkol 
+\thanks{Abdülbaki Şanlan, Emre Koyuncu, and İbrahim Özkol are with the Faculty of Aeronautics and Astronautics, Istanbul Technical University, 34467, İstanbul, Türkiye.}
+\thanks{Ege C. Altunkaya is with Aviation Institute, Istanbul Technical University, 34467, İstanbul, Türkiye.}}
+
+\markboth{Journal of \LaTeX\ Class Files,~Vol.~31, No.~8, August~2023}{Shell \MakeLowercase{\textit{et al.}}: Bare Demo of IEEEtran.cls for IEEE Journals}
+
+\maketitle
+
+\begin{abstract}
+    In vision-aided navigation and visual-inertial odometry, the quality of
+    triangulated three-dimensional feature positions is a fundamental prerequisite for state estimation accuracy. Triangulation becomes ill-conditioned or even impossible when a camera undergoes pure rotation without translation, or when the observed bearing vectors provide insufficient parallax. Even though visual-inertial odometry has been extensively studied, the active maintenance of triangulation quality during navigation has not been sufficiently addressed in the literature. To address this gap, this study presents \textbf{TANGO-VIO}, a triangulation-aware navigation framework that embeds a log-determinant metric of the feature-wise triangulation information matrix into a control barrier function, thus enforcing a lower bound on the average triangulation quality with a nominal-direction-weighted minimum-deviation velocity correction. The proposed architecture is evaluated through software-in-the-loop simulations and real flight experiments. The results show that the proposed method improves triangulation conditioning under low-parallax motion while preserving the nominal trajectory-following objective, thereby improving the reliability of visual-inertial state estimation.
+\end{abstract}
+
+\begin{IEEEkeywords}
+    visual navigation, control barrier functions, triangulation, feature observability
+\end{IEEEkeywords}
+
+\IEEEpeerreviewmaketitle
+
+\section{Introduction}
+\label{introduction}
+
+\IEEEPARstart{V}{isual-inertial} odometry (VIO) has emerged as a fundamental enabling technology for autonomous navigation in GPS-denied environments. By fusing measurements from a monocular or stereo camera with data from an inertial measurement unit (IMU), VIO systems provide real-time estimates of six-degree-of-freedom pose, velocity, and sensor biases for a broad class of robotic platforms, including micro aerial vehicles (MAVs) \cite{delmerico2018benchmark}, ground robots, and consumer augmented-reality devices. The complementary nature of visual and inertial sensing---the camera observes scene structure to constrain drift, while the IMU propagates the state between image frames at high rate---underpins the success of both Kalman Filter-based architectures \cite{mourikis2007msckf, csanlan2025particle} and nonlinear-optimization-based pipelines such as OKVIS \cite{leutenegger2015okvis} and VINS-Mono \cite{qin2018vinsmono}.
+
+Despite its maturity, VIO remains acutely sensitive to the quality of 3D feature triangulation and to the observability of its internal states. Accurate triangulation requires sufficient baseline (parallax) between the camera poses from which a landmark is observed; when the platform undergoes pure rotation, constant-velocity flight, or near-static operation, the bearing rays from successive views become nearly parallel and the triangulation information matrix becomes ill-conditioned or rank deficient \cite{wu2017unobs}. These same degenerate motions also enlarge the unobservable subspace of the visual-inertial system beyond its inherent four-dimensional nullspace---global translation and yaw---introducing additional ambiguities in metric scale and attitude \cite{hesch2014consistency, wu2017unobs, hernandez2015observability}. Hailu and Gebregziabher \cite{hailuquantifying} quantified this trajectory dependence for metric scale, showing that curved trajectories yield significantly better scale observability than straight-line motion. These results collectively underscore that the state observability and triangulation quality of VIO are not fixed system properties but depend critically on the trajectory executed by the platform.
+
+A natural countermeasure to observability loss is to plan trajectories that explicitly maximize estimation quality. Hausman et al.\ \cite{hausman2016obsaware} introduced an observability-aware trajectory-optimization framework that maximizes the smallest singular value of a local observability Gramian to ensure that states such as IMU biases remain estimable. Grebe et al.\ \cite{grebe2021obsaware} extended this line of work with a comprehensive comparison of deterministic and stochastic observability metrics for extrinsic self-calibration, concluding that both families significantly outperform random and minimum-energy trajectories but cautioning that neither metric accounts for measurement noise. While powerful, these methods operate in an open-loop, offline fashion: they pre-compute an entire trajectory 
+before execution and cannot be recomputed at the control rate, making them unsuitable for dynamic environments or real-time reference tracking. More closely related to online operation, Wu et al.\ \cite{wu2022perception} proposed a receding-horizon perception-aware planner for multicopters that samples minimum-jerk trajectories and selects the one minimizing a perception cost derived from the predicted pose-estimation covariance. Their formulation is notable for incorporating
+motion-blur effects on visual features; nevertheless, the sampling-based evaluation limits the update rate and provides no formal guarantee that the selected trajectory maintains a minimum level of feature observability. From a control-theoretic perspective, Ogri et al.\ \cite{ogri2024adaptive} formulated an adaptive optimal controller that simultaneously drives a monocular camera toward a goal position and maximizes depth observability by incorporating an orthogonality-based information term into the cost function, and later extended the framework to constrained spacecraft inspection \cite{ogri2025monocular}. However, these control-based formulations assume planar feature geometry, do not extend to the full three-dimensional triangulation problem encountered in VIO, and encode the observability objective as a soft cost rather than a hard safety constraint.
+
+Several complementary strategies have been explored to mitigate specific degeneracy modes. On the estimator side, zero-velocity updates bound drift during stationary intervals by constraining the velocity state to zero \cite{skog2010zupt}, while Kottas et al.\ \cite{kottas2013detecting} detect hovering and freeze the sliding-window clones to preserve parallax until translational motion resumes. A common hardware-based alternative is to augment the pipeline with a range sensor: Delaune et al.\ \cite{delaune2021rangevio} showed that a one-dimensional laser range finder eliminates metric-scale ambiguity even under constant-velocity flight, assuming locally flat terrain; Alberico et al.\ \cite{alberico2024structure} later relaxed this assumption with a structure-invariant formulation valid for arbitrary terrain profiles. Xu et al.\ \cite{xu2023novel} recovered scale from a single-point laser via calibrated camera--laser geometry and background tracking, and Huo and Liu \cite{huo2023range} incorporated range factors into a factor-graph VIO initialization to handle insufficiently excited motion. In the underwater domain, Ding et al.\ \cite{ding2023rd} fused a depth gauge with VIO as a unary vertical constraint. While these range- and depth-aided approaches restore observability without demanding specific motion excitation, they introduce additional hardware cost, weight, and calibration burden. %At the other end of the spectrum, Zhou et al.\ \cite{zhou2022depth} incorporated learned monocular depth priors into the visual-inertial initialization; however, the approach targets the initialization phase specifically and the predicted depths remain scale- and shift-ambiguous, requiring continued inertial coupling for metric operation.%
+
+
+In parallel, Control Barrier Functions (CBFs) have gained prominence as a principled framework for enforcing state constraints in safety-critical robotic systems by rendering a user-defined safe set forward invariant \cite{ames}. In visual robotics, CBFs have been applied predominantly to enforce visibility constraints---ensuring that target features remain within the camera field of view. Salehi et al.\ \cite{salehi2021cbfibvs} developed a barrier-function-based transformation that maps image-plane feature dynamics into an equivalent unconstrained system, guaranteeing that all feature points satisfy user-prescribed bounds throughout the servoing task. Heshmati-Alamdari et al.\ \cite{heshmati2024cbfmms} proposed a two-tiered CBF-based image-based visual servoing (IBVS) controller for mobile manipulator systems that simultaneously enforces field-of-view constraints and joint-level velocity limits. Abdi et al.\ \cite{abdi2023vcbf} introduced a vision-based CBF (V-CBF) constructed directly from RGB-D images using a conditional generative adversarial network, enabling safe navigation in unknown environments with obstacles of arbitrary shape. In the domain of observability enforcement, Coleman et al.\ \cite{coleman2024cbfobs} demonstrated that a CBF can maintain a lower bound on the inverse condition number of the Fisher information matrix for a range-based target-tracking problem, preventing the tracker from entering geometrically degenerate configurations. While these works establish the utility of CBFs for visibility and observability constraints, none addresses the specific problem of maintaining triangulation quality in a visual-inertial navigation context. The interplay between the camera's bearing measurements, the platform's translational motion, and the resulting information content of the triangulation subproblem has not been encoded as a CBF constraint.
+
+The foregoing survey reveals a significant gap. Observability-aware trajectory-optimization methods \cite{hausman2016obsaware, grebe2021obsaware} generate motions that improve state estimation quality but operate offline. Perception-aware planners \cite{wu2022perception} and adaptive optimal controllers \cite{ogri2024adaptive, ogri2025monocular} operate online but encode observability as a soft cost without providing a hard guarantee on minimum triangulation quality. Range- and depth-aided approaches \cite{delaune2021rangevio, alberico2024structure, xu2023novel, huo2023range, ding2023rd} restore metric-scale observability but at the expense of additional sensing hardware and without addressing triangulation conditioning. CBF-based methods have been successfully applied to field-of-view constraints \cite{salehi2021cbfibvs, heshmati2024cbfmms} and to observability of range-based tracking \cite{coleman2024cbfobs}, but have not yet been brought to bear on the triangulation problem central to visual-inertial odometry. This paper addresses the following question: \emph{Can triangulation quality be enforced as a real-time safety constraint while retaining the nominal trajectory as a minimum-deviation reference, rather than replacing it with an offline observability-optimized trajectory?}
+
+We answer this question affirmatively by introducing \textbf{TANGO-VIO} (\textbf{T}riangulation-\textbf{A}ware \textbf{N}avigation with \textbf{G}uaranteed \textbf{O}bservability for \textbf{V}isual-\textbf{I}nertial \textbf{O}dometry), a framework that embeds a triangulation quality constraint directly into the velocity-command layer of a VIO-guided platform via a Control Barrier Function. The main contributions of this study are as follows:
+
+\begin{itemize}
+
+\item We introduce triangulation-aware navigation as an online motion-planning problem for visual-inertial odometry. Instead of treating triangulation quality as a passive byproduct of the executed trajectory, the proposed framework actively modifies the commanded motion when the accumulated feature geometry becomes insufficient for well-conditioned triangulation.
+
+\item We encode feature-level triangulation quality as a Control Barrier Function constraint. In particular, the average log-determinant of the feature-wise triangulation information matrices is used to define a safe set that lower-bounds the aggregate triangulation informativeness over the active camera-pose window.
+
+\item We derive the corresponding bearing-based Lie derivatives and formulate a nominal-direction-weighted minimum-deviation safety filter. The resulting formulation admits both a hard-CBF mode, which prioritizes triangulation-quality preservation, and a slack-enabled soft-CBF mode, which explicitly trades triangulation maintenance against nominal trajectory tracking.
+
+\item We validate the proposed TANGO-VIO framework through software-in-the-loop simulations and real flight experiments, demonstrating that the method mitigates low-parallax triangulation degradation while preserving the nominal navigation objective with limited trajectory distortion.
+
+\end{itemize}
+
+
+The remainder of the paper is organized as follows: Section~\ref{preliminaries} establishes the mathematical preliminaries on bearing-based triangulation and control barrier functions. Section~\ref{methodology} derives the triangulation-aware CBF and the associated QP formulation. Section~\ref{results} presents simulation and flight-test results. Finally, Section~\ref{conclusion} offers concluding remarks and future directions.
+
+\section{Preliminaries}
+\label{preliminaries}
+
+The necessary background for the subsequent sections is established in this section.
+
+\subsection{Notations}
+\label{notations}
+
+A vector is denoted by bold lowercase type, e.g., $\bm{x}$, while a matrix is denoted by bold uppercase type, e.g., $\bm{A}$. The transpose of a vector or matrix is denoted by $(\cdot)^{\top}$, and the time derivative of a variable is denoted by $\dot{(\cdot)}$. The Euclidean norm is denoted by $\|\cdot\|_{2}$. For a symmetric positive-definite matrix $\bm{W}$, the weighted norm is denoted by $\|\cdot\|_{\bm{W}}$, where $\|\bm{a}\|_{\bm{W}}^{2} \triangleq \bm{a}^{\top}\bm{W}\bm{a}$. The trace and determinant operators are denoted by $\Tr(\cdot)$ and $\det(\cdot)$, respectively. The set of real numbers is denoted by $\mathbb{R}$, and the identity matrix of compatible dimension is denoted by $\bm{I}$.
+
+Coordinate frames are denoted by calligraphic letters, e.g., $\mathcal{F}_{A}$. A vector $\bm{p}$ expressed in frame $\mathcal{F}_{A}$ is written as ${}^{A}\bm{p}$, where the superscript is the identifying label of the frame. When the point or object associated with the vector must be specified, it appears as a subscript, e.g., ${}^{A}\bm{p}_{C}$ denotes the position of point $C$ expressed in $\mathcal{F}_{A}$. A rotation matrix from $\mathcal{F}_{X}$ to $\mathcal{F}_{Y}$ is denoted by $\bm{R}_{X}^{Y}$, so that ${}^{Y}\bm{a}=\bm{R}_{X}^{Y}{}^{X}\bm{a}$. The skew-symmetric matrix associated with $\bm{a}\in\mathbb{R}^{3}$ is denoted by $\sx{\bm{a}}$ and satisfies $\sx{\bm{a}}\bm{b}=\bm{a}\times\bm{b}$. 
+
+The following frames are used throughout this paper. $\mathcal{F}_{N}$ is the navigation frame, a local-level Earth-fixed frame with East--North--Up (ENU) orientation. $\mathcal{F}_{B}$ is the body frame, rigidly attached to the vehicle with Forward--Left--Up (FLU) convention. $\mathcal{F}_{C}$ is the camera frame, with the $z$-axis along the principal ray; camera poses in the active sliding window are indexed by $j=1,\ldots,n$, where $C_j$ denotes the $j$-th historical pose and $C_n$ is the most recent. $\mathcal{F}_{A}$ is the anchor frame, which coincides with $C_1$ and is held fixed over the window; all bearing vectors and feature positions are expressed in $\mathcal{F}_{A}$. Visual features are indexed by $i=1,\ldots,s$, where $s$ and $n$ denote the total number of tracked features and camera poses in the active window, respectively. A finite indexed collection of elements is written as $\{\cdot\}_{k=1}^{m}$, where $k$ is the running index and $m$ is the cardinality.
+
+For a scalar function $h(\bm{x})$, the gradient with respect to $\bm{x}$ is denoted by $\nabla_{\bm{x}}h(\bm{x})$. The Lie derivative of $h$ along a vector field $\bm{f}(\bm{x})$ is denoted by
+
+\begin{equation}
+    \mathcal{L}_{\bm{f}}h(\bm{x})
+    \triangleq
+    \nabla_{\bm{x}}h(\bm{x})^{\top}\bm{f}(\bm{x}).
+\end{equation}
+Finally, a relative-degree-one control-affine system is written as
+\begin{equation}
+\label{controlAffineSystem}
+    \dot{\bm{x}} = \bm{f}(\bm{x}) + \bm{g}(\bm{x})\bm{u},
+\end{equation}
+where $\bm{x} \in \mathbb{R}^n$ is state vector, $\bm{u} \in \mathbb{R}^m$ is control input vector. Nonlinear mappings of $\bm{f} : \mathbb{R}^n \to \mathbb{R}^n$ and $\bm{g} : \mathbb{R}^n \to \mathbb{R}^{n \times m}$ are locally Lipschitz continuous functions.
+
+\subsection{Control Barrier Functions}
+\label{controlBarrierFunctions}
+
+To encode state constraints, let $h : D\subset\mathbb{R}^n \to \mathbb{R}$ be a continuously differentiable barrier function defined on a domain $D$. The associated safe set is
+
+\begin{equation}
+    C \triangleq \{\bm{x}\in D \mid h(\bm{x}) \ge 0\},
+\end{equation}
+with boundary $\partial C \triangleq \{\bm{x}\in D \mid h(\bm{x})=0\}$ and interior $\mathrm{Int}(C)\triangleq \{\bm{x}\in D \mid h(\bm{x})>0\}$. The control objective is to render $C$ forward invariant. Consider the control-affine system in~\eqref{controlAffineSystem} with admissible inputs $\bm{u}\in U\subset\mathbb{R}^m$. The Lie derivatives of $h$ along $\bm f$ and $\bm g$ are
+
+\begin{equation}
+\begin{split}
+    \mathcal{L}_f h(\bm{x}) \triangleq \nabla h(\bm{x})^\top \bm{f}(\bm{x}),& \\
+    \mathcal{L}_g h(\bm{x}) \triangleq \nabla h(\bm{x})^\top \bm{g}(\bm{x}).&
+\end{split}
+\end{equation}
+
+\begin{definition} [Control Barrier Function \cite{ames}]
+    A continuously differentiable function $h:D\to\mathbb{R}$ is a control barrier function on $D$ if there exists an extended class-$\mathcal{K}_\infty$ function $\alpha$ such that, for all $\bm{x} \in D$,
+    
+    \begin{equation}
+    \label{cbf1}
+        \sup_{\bm{u}\in U}\Big\{\mathcal{L}_f h(\bm{x})+\mathcal{L}_g h(\bm{x})\,\bm{u}\Big\}
+        \ge -\alpha\!\big(h(\bm{x})\big).
+    \end{equation}
+    
+    Equivalently, the set of CBF-admissible controls
+    \begin{equation}
+    \label{cbf2}
+        \mathcal{U}_h(\bm{x}) \triangleq \Big\{\bm{u}\in U \,\big|\, \mathcal{L}_f h(\bm{x})+\mathcal{L}_g h(\bm{x})\,\bm{u}+\alpha\!\big(h(\bm{x})\big)\ge 0\Big\}
+    \end{equation}
+    
+is nonempty for all $\bm{x}\in D$.
+
+\end{definition}
+
+\subsection{Feature Management in MSCKF-SLAM Visual-Inertial Odometry}
+\label{msckfFeatureManagement}
+
+The TANGO-VIO framework is designed to operate with MSCKF-SLAM VIO front-ends~\cite{li2013optimization,delaune2020xvio,geneva2020openvins}, which maintain a sliding window of $n$ historical camera poses $\{C_1,\ldots,C_n\}$ and process two distinct classes of visual features. A precise understanding of how each class contributes to the state estimator and to the triangulation geometry is necessary to motivate the construction of the triangulation information matrix used in the proposed barrier function.
+
+\subsubsection*{MSCKF Features}
+The first class consists of \emph{short-track} MSCKF features: landmarks tracked across a limited number of frames and permanently discarded once they leave the active window. These features are never included in the state vector and, because their bearing accumulation is confined to a short temporal horizon, they provide only limited triangulation quality.
+
+\subsubsection*{SLAM Features}
+The second class consists of \emph{persistent} SLAM features: landmarks whose 3D positions ${}^{A}\bm{p}_{f_i}\in\R^{3}$ are explicitly maintained in the state vector and re-observed at every camera pose in the active window, thereby accumulating long-baseline bearing geometry that supports well-conditioned triangulation.
+
+\subsubsection*{Active Camera-Pose Window and Bearing Accumulation}
+The active window contains the $n$ most recent pose states $\{{}^{A}\bm{p}_{C_j},\,\bm{R}_{C_j}^{A}\}_{j=1}^{n}$. For each SLAM feature $i$, the set of anchor-frame bearing vectors $\{\bm{b}_{i,j}\}_{j=1}^{n}$ accumulated over this window encodes the multi-view parallax geometry that determines how well-conditioned the feature's triangulation is. TANGO-VIO monitors and actively shapes this geometry by treating the aggregate SLAM feature triangulation quality as a real-time safety constraint, preventing the VIO front-end from entering degenerate low-parallax regimes.
+
+
+\subsection{Triangulation Information Matrix}
+\label{triangulationInformationMatrix}
+
+For feature $i$ observed from camera pose $j$, the position of the feature in
+camera frame $C_j$ is
+\begin{equation}
+  {}^{C_j}\bm{p}_{f_i}
+  = \bm{R}_{A}^{C_j}\left({}^{A}\bm{p}_{f_i}
+  - {}^{A}\bm{p}_{C_j}\right)
+  \in\R^3 .
+  \label{eq:feature_camera_frame}
+\end{equation}
+Equivalently, after rotating this vector back to the anchor frame,
+\begin{equation}
+    \begin{split}
+  {}^{C_j\to A}\bm{p}_{f_i}
+  &= \bm{R}_{C_j}^{A}\,{}^{C_j}\bm{p}_{f_i} \\
+  &= {}^{A}\bm{p}_{f_i}-{}^{A}\bm{p}_{C_j} \\
+  &= \rho_{i,j}\,\bm{b}_{i,j}.
+  \label{eq:feature_anchor_factored}
+      \end{split}
+\end{equation}
+Hereafter, $\bm{b}_{i,j}$ denotes the bearing of feature $i$ observed from pose
+$j$ and expressed in the anchor frame.  If the raw bearing is not unit length,
+then
+\begin{equation}
+  \bm{b}_{i,j}=\eta_{i,j}\hat{\bm{b}}_{i,j},
+  \qquad
+  \eta_{i,j}=\|\bm{b}_{i,j}\|_2,
+  \qquad
+  \|\hat{\bm{b}}_{i,j}\|_2=1 .
+\end{equation}
+
+For feature $i$, the cross-product constraint at pose $j$ is
+\begin{equation}
+  \sx{\bm{b}_{i,j}}
+  \left({}^{A}\bm{p}_{f_i}-{}^{A}\bm{p}_{C_j}\right)=\bm{0}.
+\end{equation}
+Stacking all $n$ constraints over the camera poses in the trajectory window
+gives
+\begin{equation}
+  \underbrace{
+  \begin{bmatrix}
+  \bm{N}_{i,1}\\
+  \vdots\\
+  \bm{N}_{i,n}
+  \end{bmatrix}}_{\bm{A}_i\in\R^{3n\times3}}
+  {}^{A}\bm{p}_{f_i}
+  =
+  \underbrace{
+  \begin{bmatrix}
+  \bm{N}_{i,1}{}^{A}\bm{p}_{C_1}\\
+  \vdots\\
+  \bm{N}_{i,n}{}^{A}\bm{p}_{C_n}
+  \end{bmatrix}}_{\bm{q}_i\in\R^{3n}},
+  \qquad
+  \bm{N}_{i,j}=\sx{\bm{b}_{i,j}}.
+\end{equation}
+The least-squares solution satisfies
+$\bm{A}_{i}^{\top}\bm{A}_{i}{}^{A}\bm{p}_{f_i}
+=\bm{A}_{i}^{\top}\bm{q}_{i}$.  Using
+\begin{equation}
+  \bm{N}_{i,j}^{\top}\bm{N}_{i,j}
+  = \sx{\bm{b}_{i,j}}^{\top}\sx{\bm{b}_{i,j}}
+  = \eta_{i,j}^{2}\bm{I}
+    -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}
+  = \bm{\pi}_{i,j},
+\end{equation}
+the per-feature triangulation information matrix is
+\begin{equation}
+  \bm{M}_{i}
+  = \bm{A}_{i}^{\top}\bm{A}_{i}
+  = \sum_{j=1}^{n}\bm{\pi}_{i,j}
+  = \sum_{j=1}^{n}\left(\eta_{i,j}^{2}\bm{I}
+  -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}\right)
+  \in\R^{3\times3}.
+  \label{eq:Mi_def}
+\end{equation}
+
+\begin{remark}
+$\bm{M}_{i}$ is positive semidefinite by construction.  It is positive
+definite if the bearing set $\{\bm{b}_{i,j}\}_{j=1}^{n}$ provides sufficient
+parallax for feature $i$.  Therefore, each feature has its own observability
+metric and its own rank-deficiency risk.
+\end{remark}
+
+\section{Methodology}
+\label{methodology}
+
+The proposed TANGO-VIO methodology is summarized in Fig.~\ref{fig:generalOverview}. The framework operates as a navigation-level safety filter around a standard VIO-guided drone architecture. Onboard camera and IMU measurements are first processed by the VIO front-end to obtain tracked features, sliding-window camera poses, and the nominal body-frame velocity command. The active camera-pose window is then used to construct the SLAM features bearing-based triangulation information matrices, from which the average log-determinant metric and the corresponding CBF candidate are evaluated. The TANGO-VIO safety filter enforces this metric through a CBF-QP, preserving the nominal velocity command whenever it satisfies the triangulation-quality constraint and otherwise applying the minimum weighted correction required for constraint satisfaction. The resulting safe velocity command is finally sent to the ArduPilot velocity controller for drone execution.
+
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{Figures/generalOverview.png}
+    \caption{General overview of the proposed TANGO-VIO architecture. The pipeline consists of four hierarchical stages: \textbf{1)} onboard sensing and VIO, \textbf{2)} triangulation-geometry evaluation, \textbf{3)} TANGO-VIO safety filtering, and \textbf{4)} ArduPilot-based drone execution. The VIO module provides tracked features, camera-pose estimates, and the nominal velocity command $\bm{v}_{B,\mathrm{nom}}$. The triangulation module computes the bearing dynamics, projection matrices $\bm{\pi}_{i,j}$, information matrices $\bm{M}_i$, and average log-det barrier $h(\bm{x})=\bar{\ell}(\bm{x})-\bar{\ell}_{\min}$. The safety filter enforces the CBF condition through a minimum-deviation velocity correction, producing the safe command $\bm{v}_{B}^{*}$. This command is executed by the ArduPilot velocity controller, while camera, IMU, and pose feedback close the loop.}
+    \label{fig:generalOverview}
+\end{figure*}
+
+\subsection{Bearing Vector Dynamics}
+\label{bearingVectorDynamics}
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{Figures/bearingVector.png}
+    \caption{Bearing-vector geometry over the active camera-pose window. A static feature $f_i$ is observed from multiple camera poses $C_j$, and the anchor-frame relative vector ${}^{C_j \to A}\bm{p}_{f_i}={}^{A}\bm{p}_{f_i}-{}^{A}\bm{p}_{C_j}$ is decomposed into the bearing vector $\bm{b}_{i,j}$. The body-frame velocity $\bm{v}_{B,j}$, mapped into the anchor frame, induces the bearing-rate dynamics used to differentiate the triangulation information matrix.}
+    \label{fig:bearingVector}
+\end{figure}
+
+The bearing dynamics provide the connection between platform motion and the
+evolution of triangulation geometry. In the proposed formulation, the
+triangulation information matrix is constructed from the bearing-dependent
+projection matrices associated with the active camera-pose window. Therefore,
+to obtain a control-affine derivative of the triangulation-quality metric, it is
+necessary to express how the bearing vector changes as a function of the
+body-frame translational velocity command. The following derivation specializes
+this bearing-rate relationship to the anchor-frame bearing convention and the
+body-frame velocity input used in the TANGO-VIO formulation.
+
+The bearing dynamics are derived from the relative feature--camera geometry
+defined in \eqref{eq:feature_camera_frame}--\eqref{eq:feature_anchor_factored}.
+For compactness, define the anchor-frame relative position vector from camera
+pose $C_j$ to feature $f_i$ as
+\begin{equation}
+    \begin{split}
+  {}^{A}\bm{r}_{i,j}
+  &\triangleq
+  {}^{C_j\to A}\bm{p}_{f_i}, \\
+  &=
+  {}^{A}\bm{p}_{f_i}-{}^{A}\bm{p}_{C_j}, \\
+  &= \rho_{i,j}\bm{b}_{i,j}.
+  \label{eq:relative_position_anchor}
+\end{split}
+\end{equation}
+The pose-dependent translational kinematics of the camera are written as
+\begin{equation}
+  {}^{A}\dot{\bm{p}}_{C_j}
+  =
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j},
+  \label{eq:pose_velocity}
+\end{equation}
+where $\bm{v}_{B,j}$ denotes the body-frame translational velocity associated
+with pose $j$.
+
+\begin{assumption}[Static feature over the active window]
+\label{assumption:static_feature}
+The tracked point feature is assumed to be fixed in the anchor frame over the
+active camera-pose window, i.e.,
+\begin{equation}
+  {}^{A}\dot{\bm{p}}_{f_i}=\bm{0}.
+\end{equation}
+This assumption is consistent with standard VIO operation, where tracked
+landmarks are treated as static scene points over a short sliding window, while
+independently moving features are rejected by the front-end tracking and
+outlier-rejection stages.
+\end{assumption}
+
+Differentiating \eqref{eq:relative_position_anchor} with respect to time gives
+\begin{align}
+  {}^{A}\dot{\bm{r}}_{i,j}
+  &=
+  {}^{A}\dot{\bm{p}}_{f_i}
+  -
+  {}^{A}\dot{\bm{p}}_{C_j} \nonumber\\
+  &=
+  \dot{\rho}_{i,j}\bm{b}_{i,j}
+  +
+  \rho_{i,j}\dot{\bm{b}}_{i,j}.
+  \label{eq:relative_position_derivative}
+\end{align}
+Using Assumption~\ref{assumption:static_feature}, this reduces to
+\begin{equation}
+  -{}^{A}\dot{\bm{p}}_{C_j}
+  =
+  \dot{\rho}_{i,j}\bm{b}_{i,j}
+  +
+  \rho_{i,j}\dot{\bm{b}}_{i,j}.
+  \label{eq:relative_derivative_static_feature}
+\end{equation}
+Equation~\eqref{eq:relative_derivative_static_feature} separates the effect of
+camera translation into two components: a radial component that changes the
+depth $\rho_{i,j}$ and a transverse component that changes the bearing
+direction. Since triangulation quality depends on changes in bearing geometry,
+the transverse component is the quantity that ultimately enters the derivative
+of the information matrix.
+
+The bearing vector is written as
+$\bm{b}_{i,j}=\eta_{i,j}\hat{\bm{b}}_{i,j}$, where
+$\|\hat{\bm{b}}_{i,j}\|_2=1$. The normalization scale $\eta_{i,j}$ is treated
+as constant for each bearing observation; in particular, for unit-normalized
+bearings, $\eta_{i,j}=1$. Therefore, multiplying \eqref{eq:relative_derivative_static_feature} by
+$\hat{\bm{b}}_{i,j}^{\top}/\eta_{i,j}$ and using $\hat{\bm{b}}_{i,j}^{\top}\bm{b}_{i,j} = \eta_{i,j}$ and $\hat{\bm{b}}_{i,j}^{\top}\dot{\bm{b}}_{i,j} = 0$ yields
+\begin{align}
+  -\frac{\hat{\bm{b}}_{i,j}^{\top}}{\eta_{i,j}}
+  {}^{A}\dot{\bm{p}}_{C_j}
+  &=
+  \dot{\rho}_{i,j}
+  \frac{\hat{\bm{b}}_{i,j}^{\top}\bm{b}_{i,j}}{\eta_{i,j}}
+  +
+  \rho_{i,j}
+  \frac{\hat{\bm{b}}_{i,j}^{\top}\dot{\bm{b}}_{i,j}}{\eta_{i,j}},
+  \nonumber\\
+  &=
+  \dot{\rho}_{i,j}.
+\end{align}
+Thus, the depth-rate expression becomes
+\begin{equation}
+  \dot{\rho}_{i,j}
+  =
+  -\frac{\hat{\bm{b}}_{i,j}^{\top}}{\eta_{i,j}}
+  {}^{A}\dot{\bm{p}}_{C_j}.
+  \label{eq:rhodot_anchor_velocity}
+\end{equation}
+Substituting \eqref{eq:pose_velocity} into \eqref{eq:rhodot_anchor_velocity}
+gives
+\begin{equation}
+  \dot{\rho}_{i,j}
+  =
+  -\frac{\hat{\bm{b}}_{i,j}^{\top}}{\eta_{i,j}}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+  \label{eq:rhodot_multi_feature}
+\end{equation}
+The depth-rate relation isolates the radial contribution of the camera motion.
+The remaining part of the relative motion is orthogonal to the bearing
+direction and determines the bearing-rate expression used below.
+
+Next, solving \eqref{eq:relative_derivative_static_feature} for
+$\dot{\bm{b}}_{i,j}$ using \eqref{eq:rhodot_anchor_velocity} yields
+\begin{align}
+  \rho_{i,j}\dot{\bm{b}}_{i,j}
+  &=
+  -{}^{A}\dot{\bm{p}}_{C_j}
+  +
+  \bm{b}_{i,j}
+  \frac{\hat{\bm{b}}_{i,j}^{\top}}{\eta_{i,j}}
+  {}^{A}\dot{\bm{p}}_{C_j}.
+  \label{eq:bdot_projection_step_1}
+\end{align}
+Since $\bm{b}_{i,j}=\eta_{i,j}\hat{\bm{b}}_{i,j}$, one has
+$\hat{\bm{b}}_{i,j}^{\top}/\eta_{i,j}
+=
+\bm{b}_{i,j}^{\top}/\eta_{i,j}^{2}$. Therefore,
+\begin{align}
+  \rho_{i,j}\dot{\bm{b}}_{i,j}
+  &=
+  -{}^{A}\dot{\bm{p}}_{C_j}
+  +
+  \frac{1}{\eta_{i,j}^{2}}
+  \bm{b}_{i,j}\bm{b}_{i,j}^{\top}
+  {}^{A}\dot{\bm{p}}_{C_j} \nonumber\\
+  &=
+  -\frac{1}{\eta_{i,j}^{2}}
+  \left(
+  \eta_{i,j}^{2}\bm{I}
+  -
+  \bm{b}_{i,j}\bm{b}_{i,j}^{\top}
+  \right)
+  {}^{A}\dot{\bm{p}}_{C_j}.
+  \label{eq:bdot_projection_step_2}
+\end{align}
+Using the projection matrix, $\bm{\pi}_{i,j} \triangleq \eta_{i,j}^{2}\bm{I} -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}$, \eqref{eq:bdot_projection_step_2} becomes
+\begin{equation}
+  \dot{\bm{b}}_{i,j}
+  =
+  -\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{\pi}_{i,j}
+  {}^{A}\dot{\bm{p}}_{C_j}.
+  \label{eq:bdot_anchor_velocity}
+\end{equation}
+Finally, substituting the translational kinematics
+\eqref{eq:pose_velocity} into \eqref{eq:bdot_anchor_velocity} gives the
+bearing vector dynamics as
+\begin{equation}
+  \dot{\bm{b}}_{i,j}
+  =
+  -\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{\pi}_{i,j}\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+  \label{eq:bdot_multi_feature}
+\end{equation}
+
+\begin{remark}
+Equation~\eqref{eq:bdot_multi_feature} shows that only the component of the
+camera translational motion orthogonal to the bearing direction changes the
+bearing vector. The projection matrix $\bm{\pi}_{i,j}$ removes the radial
+component along $\bm{b}_{i,j}$, whereas the factor
+$1/(\rho_{i,j}\eta_{i,j}^{2})$ scales the sensitivity of the bearing change.
+The rotational quantities enter through the transformation
+$\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}$, which maps the body-frame velocity into the
+anchor-frame bearing representation.
+\end{remark}
+
+The result in \eqref{eq:bdot_multi_feature} is the key intermediate relation
+used in the triangulation-aware CBF construction. Since the projection matrix
+$\bm{\pi}_{i,j}$ and the information matrix $\bm{M}_i$ are functions of the
+bearing vectors, the derivation of the bearing vector dynamics provides the path from the commanded translational motion to the derivative of the triangulation-quality barrier. This connection enables the CBF condition to be written in a control-affine form with respect to the current body-frame velocity command.
+
+
+%%
+
+
+\subsection{Triangulation-Aware Control Barrier Function Design}
+\label{cbfDesign}
+
+The proposed triangulation-aware control barrier function is designed to maintain sufficient aggregate parallax over the active camera-pose window for the tracked features. Rather than treating visual observability as a passive property of the trajectory, the proposed formulation embeds a triangulation-quality measure directly into the navigation layer. This requires an observability metric whose Lie derivative is control-affine with respect to the current body-frame velocity command, so that corrective translational motion can be synthesized whenever the accumulated bearing geometry approaches a poorly conditioned triangulation configuration. To this end, the feature-wise log-det metric is first defined as
+\begin{equation}
+  \ell_i(\bm{x}) = \log\det\bm{M}_{i}(\bm{x}),
+  \label{eq:ell_i_def}
+\end{equation}
+where $i = 1,\ldots,s$ denotes the tracked feature index and $s \in \mathbb{N}$ is the number of tracked features. Rather than imposing the CBF condition on a single-feature metric, the proposed formulation uses the average log-det value over all tracked features,
+\begin{equation}
+  \bar{\ell}(\bm{x})
+  = \frac{1}{s}\sum_{i=1}^{s}\ell_i(\bm{x})
+  = \frac{1}{s}\sum_{i=1}^{s}\log\det\bm{M}_{i}(\bm{x}).
+  \label{eq:average_logdet}
+\end{equation}
+
+Equivalently, the average log-det metric can be interpreted as the logarithm of the geometric mean of the feature-wise determinants,
+\begin{equation}
+  \bar{\ell}(\bm{x})
+  =
+  \log\left[
+  \left(
+  \prod_{i=1}^{s}\det\bm{M}_{i}(\bm{x})
+  \right)^{1/s}
+  \right].
+  \label{eq:average_logdet_product}
+\end{equation}
+This product form shows that the proposed metric evaluates the aggregate triangulation quality over the tracked feature set through the geometric mean of the feature-wise determinant values. Let $\bar{\ell}_{\min}\in\R$ denote the prescribed minimum acceptable average log-det value. The barrier function is then defined as
+\begin{align}
+    h(\bm{x})
+    &= \bar{\ell}(\bm{x}) - \bar{\ell}_{\min} \nonumber\\
+    &=
+    \log\left[
+    \left(
+    \prod_{i=1}^{s}\det\bm{M}_{i}(\bm{x})
+    \right)^{1/s}
+    \right]
+    - \bar{\ell}_{\min}.
+  \label{eq:h_average_def}
+\end{align}
+
+Thus, the safe set becomes
+\begin{align}
+  \mathcal{C}
+  &= \left\{\bm{x}: h(\bm{x})\ge0\right\} \nonumber\\
+  &=
+  \left\{\bm{x}:
+  \log\left[
+  \left(
+  \prod_{i=1}^{s}\det\bm{M}_{i}(\bm{x})
+  \right)^{1/s}
+  \right]
+  \ge \bar{\ell}_{\min}
+  \right\}.
+  \label{eq:safe_set_average}
+\end{align}
+
+Then, the barrier derivative can be evaluated as
+\begin{equation}
+  \dot{h}(\bm{x})
+  =
+  \frac{1}{s}\sum_{i=1}^{s}\dot{\ell}_{i}.
+  \label{eq:hdot_average_metric}
+\end{equation}
+
+For each positive-definite $\bm{M}_{i}$,
+\begin{equation}
+  \dot{\ell}_{i}
+  = \frac{d}{dt}\log\det\bm{M}_{i}
+  = \Tr\left(\bm{M}_{i}^{-1}\dot{\bm{M}}_{i}\right).
+  \label{eq:ellidot_logdet_identity}
+\end{equation}
+Using \eqref{eq:Mi_def},
+\begin{align}
+  \dot{\bm{M}}_{i}
+  &= \sum_{j=1}^{n}\dot{\bm{\pi}}_{i,j} \nonumber\\
+  &= -\sum_{j=1}^{n}
+  \left(\dot{\bm{b}}_{i,j}\bm{b}_{i,j}^{\top}
+  + \bm{b}_{i,j}\dot{\bm{b}}_{i,j}^{\top}\right),
+  \label{eq:Midot}
+\end{align}
+where $\eta_{i,j}$ is assumed constant for normalized bearing measurements. For unit-normalized bearings, $\eta_{i,j}=1$. Substituting \eqref{eq:Midot} into \eqref{eq:ellidot_logdet_identity} gives
+\begin{align}
+  \dot{\ell}_{i}
+  &=
+  -\sum_{j=1}^{n}
+  \Tr\left[
+  \bm{M}_{i}^{-1}
+  \left(
+  \dot{\bm{b}}_{i,j}\bm{b}_{i,j}^{\top}
+  +
+  \bm{b}_{i,j}\dot{\bm{b}}_{i,j}^{\top}
+  \right)
+  \right] \nonumber\\
+  &=
+  -\sum_{j=1}^{n}
+  \left[
+  \Tr\left(
+  \bm{M}_{i}^{-1}\dot{\bm{b}}_{i,j}\bm{b}_{i,j}^{\top}
+  \right)
+  +
+  \Tr\left(
+  \bm{M}_{i}^{-1}\bm{b}_{i,j}\dot{\bm{b}}_{i,j}^{\top}
+  \right)
+  \right] \nonumber\\
+  &=
+  -\sum_{j=1}^{n}
+  \left[
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\dot{\bm{b}}_{i,j}
+  +
+  \dot{\bm{b}}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{b}_{i,j}
+  \right].
+  \label{eq:ellidot_trace_expanded}
+\end{align}
+Since $\bm{M}_{i}^{-1}$ is symmetric, the two scalar terms in \eqref{eq:ellidot_trace_expanded} are equal. Therefore,
+\begin{equation}
+  \dot{\ell}_{i}
+  = -2\sum_{j=1}^{n}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\dot{\bm{b}}_{i,j}.
+  \label{eq:ellidot_compact}
+\end{equation}
+
+Using the bearing-rate model in \eqref{eq:bdot_multi_feature}, the feature-wise metric derivative becomes
+\begin{align}
+  \dot{\ell}_{i}
+  &=
+  -2\sum_{j=1}^{n}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}
+  \left(
+  -\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{\pi}_{i,j}\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}
+  \right) \nonumber\\
+  &=
+  2\sum_{j=1}^{n}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+  \label{eq:ellidot_after_bdot}
+\end{align}
+Since $\dot{h}(\bm{x}) = (1/s)\sum_{i=1}^{s}\dot{\ell}_{i}$, substituting \eqref{eq:ellidot_after_bdot} into \eqref{eq:hdot_average_metric} yields
+\begin{align}
+  \dot{h}(\bm{x})
+  &= \frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+  \label{eq:hdot_average_expanded}
+\end{align}
+
+Here, the active camera-pose window is treated as a time-indexed trajectory segment; hence, the bearing-rate contributions associated with previous poses are evaluated from recorded velocity data, whereas only the current-pose velocity remains designable. Because only the current-pose velocity $\bm{v}_{B,n}\equiv\bm{v}_{B}$ is the control input while all past-pose velocities $\bm{v}_{B,j}$, $j<n$, are recorded quantities within the active camera-pose window, the double sum splits naturally into a drift term and a control term. To isolate the designable control input, \eqref{eq:hdot_average_expanded} is separated into the past-pose contributions $j=1,\ldots,n-1$ and the current-pose contribution $j=n$ as
+\begin{align}
+  \dot{h}(\bm{x})
+  &=
+  \frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n-1}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}
+  \nonumber\\
+  &\quad+
+  \frac{2}{s}\sum_{i=1}^{s}
+  \frac{1}{\rho_{i,n}\eta_{i,n}^{2}}
+  \bm{b}_{i,n}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,n}
+  \bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\bm{v}_{B}.
+  \label{eq:hdot_split_current_past}
+\end{align}
+For the current-pose term, the scalar identity
+\begin{align}
+  &\bm{b}_{i,n}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,n}
+  \bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\bm{v}_{B} \nonumber\\
+  &\quad =
+  \left[
+  \left(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\right)^{\top}
+  \bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}
+  \right]^{\top}
+  \bm{v}_{B}
+  \label{eq:current_term_scalar_identity}
+\end{align}
+is used, where the symmetry of $\bm{M}_{i}^{-1}$ and $\bm{\pi}_{i,n}$ has been exploited. Therefore, the barrier derivative can be written in the control-affine form
+\begin{equation}
+  \dot{h}(\bm{x})
+  =
+  \nabla_{\bm{x}} h(\bm{x})^{\top}\dot{\bm{x}}
+  =
+  \underbrace{
+  \overbrace{\mathcal{L}_{\bm{F}}h(\bm{x})}^{\triangleq\, f(\bm{x})}
+  }_{\text{drift}}
+  +
+  \underbrace{
+  \overbrace{\mathcal{L}_{\bm{G}}h(\bm{x})}^{\triangleq\, \bm{g}(\bm{x})^{\top}}
+  }_{\text{control}}
+  \bm{v}_{B},
+  \label{eq:hdot_drift_control}
+\end{equation}
+where
+\begin{align}
+  f(\bm{x})
+  &= \frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n-1}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j},
+  \label{eq:drift_def}\\[6pt]
+  \bm{g}(\bm{x})
+  &= \frac{2}{s}\sum_{i=1}^{s}
+  \frac{1}{\rho_{i,n}\eta_{i,n}^{2}}
+  \left(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\right)^{\top}
+  \bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}.
+  \label{eq:g_def}
+\end{align}
+
+From the decomposition in \eqref{eq:hdot_drift_control}, the barrier derivative has the control-affine structure with the drift and control-input gradient defined in \eqref{eq:drift_def}--\eqref{eq:g_def}. The scalar drift collects the known contributions of all past-pose recorded velocities, and all quantities in $f(\bm{x})$ are evaluated from the recorded trajectory window and are therefore computable at each time step without any design freedom. Furthermore, $\bm{g}(\bm{x})$ is the body-frame gradient that multiplies the designable velocity command.
+
+The compact average log-det CBF condition is then imposed using the linear extended class-$\mathcal{K}_{\infty}$ function $\alpha(h)=\gamma h$, with $\gamma \in \mathbb{R}_{>0}$, as
+\begin{equation}
+  f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma
+  \left(
+  \log\left[
+  \left(
+  \prod_{i=1}^{s}\det\bm{M}_{i}(\bm{x})
+  \right)^{1/s}
+  \right]
+  - \bar{\ell}_{\min}
+  \right)
+  \ge 0.
+  \label{eq:cbf_condition_average}
+\end{equation}
+Equivalently, by the definition of $h(\bm{x})$ in \eqref{eq:h_average_def},
+\begin{equation}
+  f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma h(\bm{x}) \ge 0.
+  \label{eq:cbf_condition_compact}
+\end{equation}
+If the resulting command satisfies \eqref{eq:cbf_condition_compact} for all $t \geq 0$, then
+\begin{equation}
+  \dot{h}(\bm{x}) \ge -\alpha(h(\bm{x})).
+\end{equation}
+Since $\alpha(\cdot)$ is selected as an extended class-$\mathcal{K}_{\infty}$ function, the condition is well-defined on both sides of the boundary $h(\bm{x})=0$. In particular, for any trajectory initialized in the safe set, i.e., $h(\bm{x}(0))\ge0$, the comparison lemma implies that $h(\bm{x}(t))\ge0$ for all $t\ge0$. Hence, the average-observability safe set $\mathcal{C}$ is forward invariant whenever the CBF condition is imposed as a hard constraint and the corresponding admissible velocity set is nonempty.
+
+
+%%
+
+
+\subsection{Mission-Dependent Refinement}
+
+The hard CBF condition in \eqref{eq:cbf_condition_compact} provides the strictest form of triangulation-quality maintenance. However, practical navigation tasks may also involve higher-priority mission requirements, such as stopping, hovering, actuator saturation, or preserving a prescribed trajectory. In these cases, enforcing the triangulation-aware CBF as an unconditional hard constraint may require a velocity command that is unnecessarily far from the nominal command, or it may conflict with the mission objective itself. To obtain a formulation that can represent both strict and relaxed operation, the CBF condition is written in a both triangulation- and priority-aware form by introducing a nonnegative slack variable $\delta_T\in\R_{\ge0}$:
+\begin{equation}
+  f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma h(\bm{x})+\delta_T \ge 0.
+  \label{eq:soft_cbf_condition}
+\end{equation}
+The slack variable quantifies the instantaneous relaxation of the triangulation-maintenance constraint. If $\delta_T=0$, \eqref{eq:soft_cbf_condition} reduces exactly to the hard CBF condition in \eqref{eq:cbf_condition_compact}. If $\delta_T>0$, the strict forward-invariance guarantee associated with the prescribed threshold is intentionally softened. Thus, the slack variable is not introduced as a numerical device; it is introduced as a priority variable that measures the amount by which the triangulation objective is sacrificed when it competes with the nominal mission command.
+
+This general formulation allows the same mathematical structure to represent two operating choices. If strict feature observability is required, $\delta_T$ is fixed to zero and the hard CBF constraint is imposed. If the mission requires the vehicle to remain closer to the nominal command, or if the nominal command encodes a higher-priority task, $\delta_T$ is optimized and penalized. The resulting value of $\delta_T$ then provides a direct diagnostic of the conflict between the triangulation-maintenance objective and the nominal mission objective.
+
+Finally, the CBF-QP setup is formulated using a weighted deviation cost.
+Let $\bm{W}_{B}\in\R^{3\times3}$ denote a symmetric positive-definite weighting matrix, i.e. $\bm{W}_{B}=\bm{W}_{B}^{\top}$, $\bm{a}^{\top}\bm{W}_{B}\bm{a}>0$   $\forall \bm{a}\in\R^{3}\setminus\{\bm{0}\}$. This weighted metric is introduced to reduce unnecessary rotation of the corrected velocity command away from the intended direction of motion. In particular, deviations along the instantaneous nominal direction are penalized less than deviations in the perpendicular subspace. Let the instantaneous nominal body-frame direction be defined as
+\begin{equation}
+  \bm{t}_{B}
+  =
+  \frac{\bm{v}_{B,\mathrm{nom}}}
+  {\|\bm{v}_{B,\mathrm{nom}}\|_{2}},
+  \label{eq:nominal_tangent_direction}
+\end{equation}
+where $\|\bm{v}_{B,\mathrm{nom}}\|_{2}>\varepsilon_v$ and $\varepsilon_v>0$ is a small threshold used to avoid direction ambiguity at very low nominal speeds. When the nominal speed falls below this threshold, no instantaneous tangential direction is assigned and the correction should not be interpreted as direction preserving; in that case, the active CBF correction is governed by the barrier gradient and the selected positive-definite weighting. The tangent and perpendicular projection matrices are then defined as
+\begin{align}
+  \bm{P}_{\parallel} &= \bm{t}_{B}\bm{t}_{B}^{\top}, \\
+  \bm{P}_{\perp} &= \bm{I}-\bm{t}_{B}\bm{t}_{B}^{\top},
+  \label{eq:tangent_perpendicular_projection}
+\end{align}
+where $\bm{P}_{\parallel},\bm{P}_{\perp}\in\R^{3\times3}$. The weighting
+matrix is selected as
+\begin{equation}
+  \bm{W}_{B}
+  =
+  w_{\parallel}\bm{P}_{\parallel}
+  +
+  w_{\perp}\bm{P}_{\perp},
+  \label{eq:weighted_metric_matrix}
+\end{equation}
+where $w_{\parallel}$ and $w_{\perp}$ denote the tangent and perpendicular
+weights, respectively and satisfy $0<w_{\parallel}<w_{\perp}$. Since $\bm{P}_{\parallel}$ and $\bm{P}_{\perp}$ are orthogonal projection matrices satisfying
+$\bm{P}_{\parallel}+\bm{P}_{\perp}=\bm{I}$, the matrix $\bm{W}_{B}$ is symmetric positive definite for $0<w_{\parallel}<w_{\perp}$. Hence, $\bm{W}_{B}^{-1}$ exists. Moreover, because $w_{\parallel}<w_{\perp}$, deviations parallel to the current nominal velocity are penalized less than deviations in the perpendicular subspace. Therefore, when the CBF constraint becomes active and the nominal velocity is nonzero, the safety filter preferentially modifies the speed along the intended direction of motion before introducing lateral velocity components. This interpretation is not applied during terminal stop or hover intervals, where the nominal tangential direction is not well-defined.
+
+Using the weighted metric and the relaxed CBF condition, the triangulation- and priority-aware TANGO-VIO safety filter is formulated as
+\begin{equation}
+  \begin{aligned}
+  \bm{v}_{B}^{*},\delta_T^{*}
+  =
+  \underset{\substack{\bm{v}_{B}\in\R^{3}\\\delta_T\in\R}}{\operatorname{arg\,min}}
+  &\quad
+  \frac{1}{2}
+  \left\|
+  \bm{v}_{B}-\bm{v}_{B,\mathrm{nom}}
+  \right\|_{\bm{W}_{B}}^{2}
+  +
+  \frac{p_T}{2}\delta_T^{2}\\
+  \mathrm{s.t.}
+  &\quad
+  f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma h(\bm{x})+\delta_T\ge0,\\
+  &\quad
+  \delta_T\ge0.
+  \end{aligned}
+  \label{eq:soft_weighted_cbf_qp}
+\end{equation}
+where $p_T>0$ is the triangulation-priority weight. A larger value of $p_T$ penalizes CBF relaxation more strongly, so the optimizer behaves closer to the hard-CBF formulation. A smaller value of $p_T$ allows more relaxation of the triangulation constraint, thereby keeping the corrected velocity command closer to the nominal command when the two objectives conflict. The hard-CBF formulation is recovered from \eqref{eq:soft_weighted_cbf_qp} by imposing $\delta_T=0$.
+
+To derive the closed-form solution of \eqref{eq:soft_weighted_cbf_qp}, define the CBF residual evaluated at the nominal command as
+\begin{equation}
+  \mu \triangleq f(\bm{x}) + \bm{g}(\bm{x})^{\top}\bm{v}_{B,\mathrm{nom}} + \gamma h(\bm{x}).
+  \label{eq:soft_mu_def}
+\end{equation}
+If $\mu\ge0$, the nominal command already satisfies the hard CBF condition. Therefore, the optimal solution is
+\begin{equation}
+  \bm{v}_{B}^{*}=\bm{v}_{B,\mathrm{nom}},
+  \qquad
+  \delta_T^{*}=0.
+  \label{eq:soft_inactive_solution}
+\end{equation}
+
+For the active case $\mu<0$, the relaxed CBF constraint is active at the optimum. The Lagrangian of \eqref{eq:soft_weighted_cbf_qp} is written directly in terms of $\bm{v}_{B}$ as
+\begin{align}
+  \mathfrak{L}(\bm{v}_{B},\delta_T,\lambda)
+  =&
+  \frac{1}{2}
+  \left\|
+  \bm{v}_{B}-\bm{v}_{B,\mathrm{nom}}
+  \right\|_{\bm{W}_{B}}^{2}
+  +
+  \frac{p_T}{2}\delta_T^{2} \nonumber\\
+  &-
+  \lambda
+  \left(
+  f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma h(\bm{x})+\delta_T
+  \right),
+  \label{eq:soft_lagrangian}
+\end{align}
+where $\lambda\in\R_{\ge0}$ is the Lagrange multiplier associated with the relaxed CBF constraint. The stationarity condition with respect to $\bm{v}_{B}$ gives
+\begin{equation}
+  \frac{\partial\mathfrak{L}}{\partial \bm{v}_{B}}
+  =
+  \bm{W}_{B}\left(\bm{v}_{B}-\bm{v}_{B,\mathrm{nom}}\right)
+  -
+  \lambda\bm{g}(\bm{x})
+  =
+  \bm{0}.
+  \label{eq:soft_stationarity_v}
+\end{equation}
+Since $\bm{W}_{B}$ is invertible, \eqref{eq:soft_stationarity_v} yields
+\begin{equation}
+  \bm{v}_{B}^{*}
+  =
+  \bm{v}_{B,\mathrm{nom}}
+  +
+  \lambda^{*}\bm{W}_{B}^{-1}\bm{g}(\bm{x}).
+  \label{eq:soft_v_solution_lambda}
+\end{equation}
+The stationarity condition with respect to $\delta_T$ gives
+\begin{equation}
+  \frac{\partial\mathfrak{L}}{\partial \delta_T}
+  =
+  p_T\delta_T-\lambda
+  =
+  0.
+  \label{eq:soft_stationarity_delta}
+\end{equation}
+Therefore,
+\begin{equation}
+  \delta_T^{*}
+  =
+  \frac{\lambda^{*}}{p_T}.
+  \label{eq:soft_delta_solution}
+\end{equation}
+Substituting \eqref{eq:soft_v_solution_lambda} and \eqref{eq:soft_delta_solution} into the active CBF constraint gives
+\begin{align}
+  0
+  &=
+  f(\bm{x})
+  +
+  \bm{g}(\bm{x})^{\top}
+  \left(
+  \bm{v}_{B,\mathrm{nom}}
+  +
+  \lambda^{*}\bm{W}_{B}^{-1}\bm{g}(\bm{x})
+  \right)
+  +
+  \gamma h(\bm{x})
+  +
+  \frac{\lambda^{*}}{p_T} \nonumber\\
+  &=
+  \mu
+  +
+  \lambda^{*}
+  \left(
+  \bm{g}(\bm{x})^{\top}\bm{W}_{B}^{-1}\bm{g}(\bm{x})
+  +
+  \frac{1}{p_T}
+  \right).
+  \label{eq:soft_lambda_substitution}
+\end{align}
+Let define $S(\bm{x}) \triangleq \bm{g}(\bm{x})^{\top}\bm{W}_{B}^{-1}\bm{g}(\bm{x})$. The optimal multiplier is obtained as
+\begin{equation}
+  \lambda^{*}
+  =
+  -
+  \frac{\mu}
+  {S(\bm{x})+\frac{1}{p_T}}.
+  \label{eq:soft_lambda_solution}
+\end{equation}
+Since the active case occurs only when $\mu<0$, the multiplier satisfies $\lambda^{*}>0$, which is consistent with the Karush-Kuhn-Tucker (KKT) condition $\lambda^{*}\ge0$.
+
+Consequently, the closed-form velocity command is
+\begin{equation}
+  \bm{v}_{B}^{*}
+  =
+  \begin{cases}
+  \bm{v}_{B,\mathrm{nom}},
+  & \mu\ge0,\\[8pt]
+  \bm{v}_{B,\mathrm{nom}}
+  -
+  \dfrac{\mu}
+  {S(\bm{x})+\dfrac{1}{p_T}}
+  \bm{W}_{B}^{-1}\bm{g}(\bm{x}),
+  & \mu<0,
+  \end{cases}
+  \label{eq:soft_closed_form_velocity}
+\end{equation}
+and the optimal slack is
+\begin{equation}
+  \delta_T^{*}
+  =
+  \begin{cases}
+  0,
+  & \mu\ge0,\\[8pt]
+  \dfrac{-\mu}
+  {1+p_T S(\bm{x})},
+  & \mu<0.
+  \end{cases}
+  \label{eq:soft_closed_form_slack}
+\end{equation}
+
+Equations~\eqref{eq:soft_closed_form_velocity}--\eqref{eq:soft_closed_form_slack} show that the optimizer does not simply minimize the slack variable alone. Instead, it minimizes the combined cost of velocity-command deviation and triangulation-constraint relaxation. For any selected velocity command, the smallest admissible slack is used; however, the globally optimal solution may intentionally use a nonzero slack if satisfying the hard CBF would require an excessive deviation from $\bm{v}_{B,\mathrm{nom}}$. 
+
+The relaxed CBF condition modifies the theoretical guarantee. From \eqref{eq:soft_cbf_condition}, one obtains
+\begin{equation}
+  \dot{h}(\bm{x})
+  \ge
+  -\gamma h(\bm{x})-\delta_T.
+  \label{eq:soft_cbf_differential_inequality}
+\end{equation}
+Therefore, the original forward-invariance guarantee is preserved when $\delta_T(t)=0$ for all $t$. When $\delta_T(t)>0$, the triangulation-quality constraint is intentionally relaxed, and $\delta_T(t)$ quantifies the instantaneous loss of the strict CBF guarantee.
+
+
+%%
+
+
+
+
+
+\section{Results}
+\label{results}
+
+The proposed TANGO-VIO layer is evaluated in both software-in-the-loop (SITL) simulations and flight-test experiments. The SITL analysis uses representative square and climbing trajectories that expose low-parallax motion, terminal stopping, and altitude-dependent triangulation degradation. Three operating modes are compared: the nominal baseline, the hard-CBF formulation, and the slack-enabled soft-CBF formulation. The results are analyzed through the commanded-motion response of the proposed layer and the resulting visual-information quality.
+
+\subsection{Software-in-the-Loop Results}
+\label{SITL}
+
+\subsubsection{SITL Setup and Baseline Definition}
+
+The SITL setup consists of a Gazebo-based three-dimensional environment, an ArduPilot flight stack, and ROS2(Robot Operating System) communication through MAVROS. The simulated multirotor is commanded through the body-frame velocity interface used by the proposed architecture. At each safety-filter update, the active camera-pose window and tracked feature bearings are used to compute the feature-wise triangulation information matrices, the average log-det barrier value, and the minimum-deviation velocity command.
+
+Two representative scenarios are considered.
+
+\begin{scenario}[Square trajectory]
+    The vehicle follows a square path with $100~\mathrm{m}$ side length at an altitude of $60~\mathrm{m}$ and an average nominal speed of $3~\mathrm{m/s}$. The start and finish points coincide, so the nominal mission includes a terminal stop at the initial position.
+\end{scenario}
+
+\begin{scenario}[Climbing trajectory]
+    The vehicle follows a forward-climbing path with $3~\mathrm{m/s}$ nominal body Forward speed and $1~\mathrm{m/s}$ nominal body Up speed, increasing the altitude from $30~\mathrm{m}$ until it traverses $100~\mathrm{m}$ distance in the forward direction.
+\end{scenario}
+
+For each scenario, three operating modes are compared. In the nominal baseline, the TANGO-VIO correction is disabled and the commanded velocity is the reference velocity generated by the mission planner. In the hard-CBF mode, the triangulation constraint in \eqref{eq:cbf_condition_compact} is imposed without relaxation; therefore, maintaining the prescribed log-det threshold has priority over terminal stopping or exact path tracking. In the soft-CBF mode, the slack-enabled formulation in \eqref{eq:soft_cbf_condition}--\eqref{eq:soft_closed_form_slack} is used, allowing the controller to trade instantaneous triangulation-quality enforcement against deviation from the nominal command.
+
+\subsubsection{CBF-Induced Navigation Response}
+\label{cbf_induced_navigation_response}
+
+The commanded-motion response of the proposed layer is evaluated using the barrier-constraint evolution, the deviation between the nominal and corrected velocity commands, and the resulting trajectory-level motion.
+
+\emph{Square trajectory:}
+For the square trajectory, the hard-CBF formulation produces a strict triangulation-priority response. As shown in Fig.~\ref{fig:square_hard_cbf_response}, the corrected command departs from the nominal velocity whenever the barrier condition approaches activity. The barrier history verifies satisfaction of the unrelaxed CBF inequality, while the three-dimensional trajectory shows the corresponding geometric consequence: the path expands relative to the nominal square and the vehicle is not allowed to stop exactly at the nominal terminal point because doing so would remove the translational excitation needed for triangulation.
+
+\begin{figure*}[!t]
+    \centering
+    \subfloat[Velocity command modification.\label{fig:square_hard_velocityComparison}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Hard/velocityComparison.png}}
+    \hfill
+    \subfloat[Barrier-constraint history.\label{fig:square_hard_CBFHistory}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Hard/CBFHistory.png}}
+    \hfill
+    \subfloat[Three-dimensional response.\label{fig:square_hard_3Dtraj}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Hard/3Dtraj.png}}
+    \caption{CBF-induced navigation response for the square trajectory under the hard constraint. The unrelaxed triangulation constraint produces velocity corrections when the nominal command becomes insufficient for maintaining parallax, leading to the larger trajectory-level deviation from the nominal square.}
+    \label{fig:square_hard_cbf_response}
+\end{figure*}
+
+The soft-CBF result in Fig.~\ref{fig:square_soft_cbf_response} exhibits the same corrective mechanism with reduced intervention severity. The corrected velocity remains closer to the nominal command, particularly near the terminal portion of the mission. The slack history identifies the instants at which strict enforcement of the original log-det threshold competes with the nominal path-following objective. Consequently, the soft-CBF trajectory retains the nominal square geometry more closely while still introducing parallax-enhancing motion in the low-excitation intervals.
+
+\begin{figure*}[!t]
+    \centering
+    \subfloat[Velocity command modification.\label{fig:square_soft_velocityComparison}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Soft/velocityComparison.png}}
+    \hfill
+    \subfloat[Relaxed barrier and slack history.\label{fig:square_soft_CBFHistory}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Soft/CBFHistory.png}}
+    \hfill
+    \subfloat[Three-dimensional response.\label{fig:square_soft_3Dtraj}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Soft/3Dtraj.png}}
+    \caption{CBF-induced navigation response for the square trajectory under the soft constraint. The slack-enabled formulation keeps the corrected command closer to the nominal command than the hard-CBF case while retaining triangulation-aware corrections in poorly conditioned visual-geometry intervals.}
+    \label{fig:square_soft_cbf_response}
+\end{figure*}
+
+The aggregate trajectory comparison in Fig.~\ref{fig:square_trajComparison} summarizes the effect of the two constraint choices. The hard-CBF trajectory expands substantially because triangulation preservation is treated as a strict requirement. The soft-CBF trajectory remains much closer to the nominal path, showing that slack-enabled operation reduces path distortion while retaining the ability to react to low-parallax motion.
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{Figures/SITL/Square/trajComparison.png}
+    \caption{Trajectory-level comparison for the square scenario. The hard CBF produces the larger path distortion and shifts the terminal behavior, whereas the soft CBF preserves the main shape of the nominal trajectory more closely by allowing controlled relaxation of the triangulation constraint.}
+    \label{fig:square_trajComparison}
+\end{figure}
+
+\emph{Climbing trajectory:}
+The climbing trajectory evaluates the proposed layer under coupled forward and vertical motion. Under the hard constraint, Fig.~\ref{fig:climb_hard_cbf_response} shows that the CBF filter modifies the forward and vertical velocity components when the nominal climb becomes insufficient to maintain triangulation quality. The barrier history confirms satisfaction of the unrelaxed condition, and the three-dimensional trajectory illustrates the resulting terminal deviation. This behavior is not only a consequence of the terminal low-velocity phase; as altitude increases, the translational motion required to maintain well-defined triangulation also increases. Therefore, a constant nominal velocity can become insufficient after a certain altitude even before the terminal segment is reached.
+
+\begin{figure*}[!t]
+    \centering
+    \subfloat[Velocity command modification.\label{fig:climb_hard_velocityComparison}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Hard/velocityComparison.png}}
+    \hfill
+    \subfloat[Barrier-constraint history.\label{fig:climb_hard_CBFHistory}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Hard/CBFHistory.png}}
+    \hfill
+    \subfloat[Three-dimensional response.\label{fig:climb_hard_3Dtraj}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Hard/3Dtraj.png}}
+    \caption{CBF-induced navigation response for the climbing trajectory under the hard constraint. The strict triangulation-priority command introduces additional motion when the nominal climb does not provide sufficient parallax, producing terminal deviation from the nominal path.}
+    \label{fig:climb_hard_cbf_response}
+\end{figure*}
+
+With the soft constraint, Fig.~\ref{fig:climb_soft_cbf_response} shows a less aggressive but still active response. The velocity correction remains closer to the nominal command than in the hard-CBF case, while the slack history records the temporary relaxation needed to balance terminal path-following against triangulation-quality maintenance. In the terminal portion, the soft formulation can permit the vehicle to slow down or stop instead of continuously injecting translational excitation. The three-dimensional trajectory therefore exhibits reduced terminal deviation, making the soft formulation more appropriate when the mission requires both visual-information support and preservation of the prescribed terminal behavior.
+
+\begin{figure*}[!t]
+    \centering
+    \subfloat[Velocity command modification.\label{fig:climb_soft_velocityComparison}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Soft/velocityComparison.png}}
+    \hfill
+    \subfloat[Relaxed barrier and slack history.\label{fig:climb_soft_CBFHistory}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Soft/CBFHistory.png}}
+    \hfill
+    \subfloat[Three-dimensional response.\label{fig:climb_soft_3Dtraj}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Soft/3Dtraj.png}}
+    \caption{CBF-induced navigation response for the climbing trajectory under the soft constraint. The slack-enabled correction remains closer to the nominal command and reduces the terminal deviation observed with the hard constraint. Near the terminal stop, the nominal tangential direction is not well-defined, and the soft formulation may favor slack relaxation over continued parallax-generating motion.}
+    \label{fig:climb_soft_cbf_response}
+\end{figure*}
+
+The aggregate comparison in Fig.~\ref{fig:climb_trajComparison} confirms the same tradeoff observed in the square scenario. The hard CBF maintains the strict triangulation constraint at the expense of terminal path tracking, whereas the soft CBF significantly reduces this deviation by permitting controlled relaxation when the mission objective requires the vehicle to slow down or stop.
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{Figures/SITL/Climb/trajComparison.png}
+    \caption{Trajectory-level comparison for the climbing scenario. The hard CBF preserves the strict triangulation constraint at the expense of terminal path tracking, whereas the soft CBF follows the nominal climb more closely by allowing limited relaxation through the slack variable.}
+    \label{fig:climb_trajComparison}
+\end{figure}
+
+\subsubsection{Resulting Visual-Information Quality}
+\label{resulting_visual_information_quality}
+
+The effect of the CBF-induced motion on the visual front end is assessed using the number of newly triangulated features and the total SLAM feature count. These quantities characterize whether the commanded motion supplies sufficient visual baseline for continuous feature initialization and tracking.
+
+\emph{Square trajectory:}
+Fig.~\ref{fig:square_feature_count_comparison} compares the feature availability obtained under the nominal, hard-CBF, and soft-CBF cases for the square trajectory. In the nominal baseline, the number of newly triangulated features drops sharply in the shaded low-parallax intervals even though the total SLAM feature count can remain temporarily high. With the hard CBF, the additional motion commanded by the safety filter increases the number of newly triangulated features in these intervals. The soft-CBF case provides a less aggressive compromise: it maintains a usable supply of new triangulations while preserving the nominal path more closely than the hard constraint.
+
+\begin{figure*}[!t]
+    \centering
+    \subfloat[Nominal.\label{fig:square_disabled_featureCount}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Disabled/featureCount.png}}
+    \hfill
+    \subfloat[Hard-CBF.\label{fig:square_hard_featureCount}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Hard/featureCount.png}}
+    \hfill
+    \subfloat[Soft-CBF.\label{fig:square_soft_featureCount}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Square/Soft/featureCount.png}}
+    \caption{Feature availability for the square trajectory under the nominal, hard-CBF, and soft-CBF cases. The shaded intervals denote the low-parallax portions identified from the nominal baseline and are overlaid on all cases as a common reference. The hard-CBF case increases newly triangulated features over these nominally degraded intervals, while the soft-CBF case preserves this benefit with reduced trajectory distortion.}
+    \label{fig:square_feature_count_comparison}
+\end{figure*}
+
+\emph{Climbing trajectory:}
+Fig.~\ref{fig:climb_feature_count_comparison} shows the corresponding feature statistics for the climbing trajectory. The nominal climb loses triangulation quality. This degradation should not be attributed only to the terminal low-velocity phase; the increasing altitude also increases the translational motion required to preserve a sufficiently informative baseline. Both CBF configurations improve the supply of newly triangulated features by injecting additional motion when the nominal command becomes inadequate. The hard-CBF case provides the strongest triangulation-priority response, while the soft-CBF case retains the same qualitative benefit with reduced deviation from the nominal climb. The terminal reduction observed in the soft-CBF feature statistics is consistent with the permitted slowing or stopping behavior: once the vehicle approaches a near-hover state, little additional baseline is generated, and newly triangulated features may decrease even though the trajectory remains closer to the prescribed terminal condition.
+
+\begin{figure*}[!t]
+    \centering
+    \subfloat[Nominal.\label{fig:climb_disabled_featureCount}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Disabled/featureCount.png}}
+    \hfill
+    \subfloat[Hard-CBF.\label{fig:climb_hard_featureCount}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Hard/featureCount.png}}
+    \hfill
+    \subfloat[Soft-CBF.\label{fig:climb_soft_featureCount}]{%
+        \includegraphics[width=0.32\textwidth]{Figures/SITL/Climb/Soft/featureCount.png}}
+    \caption{Feature availability for the climbing trajectory under the nominal, hard-CBF, and soft-CBF cases. The shaded interval denotes the low-parallax portion identified from the nominal climb and is overlaid on all cases as a common reference to assess the effect of the CBF-induced motion. Both CBF configurations increase new feature triangulation over this nominally degraded interval. In the soft-CBF case, the terminal decrease is associated with the allowed near-hover or stop condition, for which continued parallax generation is no longer enforced as a strict requirement.}
+    \label{fig:climb_feature_count_comparison}
+\end{figure*}
+
+\subsection{Flight-Test Results}
+\label{flightTests}
+
+\section{Conclusion}
+\label{conclusion}
+
+\lipsum[1]
+
+The SITL results demonstrate the distinction between strict and relaxed triangulation-aware guidance. The hard-CBF formulation is appropriate when maintaining the prescribed triangulation-quality threshold is the dominant objective: it preserves the barrier constraint but may introduce substantial trajectory distortion and terminal deviation. The soft-CBF formulation is preferable when the mission requires a compromise between visual-information quality and path tracking: the slack variable quantifies the temporary relaxation of the triangulation threshold and allows the corrected command to remain closer to the nominal trajectory. At terminal stop or hover intervals, this relaxation can also allow the vehicle to remain near the prescribed terminal condition, in which case the lack of translational baseline limits further parallax generation. Across both scenarios, the feature statistics are consistent with the commanded-motion response, indicating that the velocity corrections provide parallax-enhancing motion rather than arbitrary path distortion.
+
+\section*{Acknowledgment}
+
+The authors would like to thank to .....
+
+\ifCLASSOPTIONcaptionsoff
+  \newpage
+\fi
+
+\printbibliography[title=References,category=cited]
+
+\vspace{12pt}
+
+\newpage
+\nocite{*}
+\printbibliography[title={To Be Cited},resetnumbers=true,notcategory=cited]
+
+\begin{IEEEbiography}{Michael Shell}
+Biography text here.
+\end{IEEEbiography}
+
+\begin{IEEEbiographynophoto}{John Doe}
+Biography text here.
+\end{IEEEbiographynophoto}
+
+\begin{IEEEbiographynophoto}{Jane Doe}
+Biography text here.
+\end{IEEEbiographynophoto}
+
+\end{document}

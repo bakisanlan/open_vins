@@ -23,7 +23,12 @@
 
 #include "state/State.h"
 
+#include "feat/Feature.h"
 #include "utils/quat_ops.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 using namespace ov_core;
 using namespace ov_type;
@@ -484,4 +489,219 @@ void UpdaterHelper::measurement_compress_inplace(Eigen::MatrixXd &H_x, Eigen::Ve
   assert(r <= H_x.rows());
   H_x.conservativeResize(r, H_x.cols());
   res.conservativeResize(r, res.cols());
+}
+
+UpdaterHelper::CbfOutput
+UpdaterHelper::compute_cbf_metrics(std::shared_ptr<State> state, const std::vector<std::shared_ptr<ov_core::Feature>> &feature_vec,
+                                   const std::unordered_map<size_t, std::unordered_map<double, FeatureInitializer::ClonePose>> &clones_cam) {
+
+  // ============================================================================
+  // CBF: Compute the average log-det observability metric ℓ̄ = (1/s) Σ log(det(M_i)),
+  // the drift f(x), and the control gradient g(x) in the body (IMU) frame.
+  //
+  //   ḣ = f(x) + g(x)ᵀ v_B
+  //
+  //   f(x) = (2/s) Σ_i Σ_{j=1..n-1}  1/(ρ_{i,j} η²) bᵀ M⁻¹ π R_{Cj}^A R_B^C v_{B,j}
+  //   g(x) = (2/s) Σ_i  1/(ρ_{i,n} η²) (R_{Cn}^A R_B^C)ᵀ π_{i,n} M⁻¹ b_{i,n}
+  //
+  // Since OpenVINS unit-normalises bearings, η = 1 and π = I - b bᵀ.
+  // R_{C_j}^A = R_AtoCi^T;  R_B^C = R_ItoC (IMU-to-camera calibration).
+  // So (R_{C_j}^A R_B^C)^T = R_ItoC^T · R_AtoCi  (anchor → body).
+  // ============================================================================
+  CbfOutput out;
+  if (feature_vec.empty() || clones_cam.empty())
+    return out;
+
+  // IMU-to-camera rotation for the first camera (cam 0)
+  const Eigen::Matrix3d R_ItoC = state->_calib_IMUtoCAM.at(0)->Rot(); // R_B^C
+  const Eigen::Matrix3d R_CtoI = R_ItoC.transpose();                  // (R_B^C)^T
+
+  // ── Estimate past velocities from clone positions ──
+  // Clone times are sorted in ascending order (std::map)
+  // v_{G,j} ≈ (p_{j+1} - p_j) / Δt, then v_{B,j} = R_GtoI_j · v_{G,j}
+  struct CloneVel {
+    double time;
+    Eigen::Vector3d v_body; // velocity in body (IMU) frame
+    bool is_current;        // true for the latest (current) pose
+  };
+  std::vector<CloneVel> clone_vels;
+  {
+    std::vector<std::pair<double, std::shared_ptr<ov_type::PoseJPL>>> sorted_clones(state->_clones_IMU.begin(),
+                                                                                    state->_clones_IMU.end());
+    for (size_t idx = 0; idx < sorted_clones.size(); idx++) {
+      double t_j = sorted_clones[idx].first;
+      bool is_last = (idx == sorted_clones.size() - 1);
+      Eigen::Vector3d v_body;
+      if (is_last) {
+        // Current pose: use the EKF's estimated velocity directly (state->_imu->vel() is v_IinG)
+        Eigen::Matrix3d R_GtoI_j = sorted_clones[idx].second->Rot();
+        v_body = R_GtoI_j * state->_imu->vel();
+      } else {
+        // Past pose: numerical differentiation of global positions
+        double t_next = sorted_clones[idx + 1].first;
+        double dt = t_next - t_j;
+        if (dt < 1e-9)
+          dt = 1e-9; // guard against division by zero
+        Eigen::Vector3d p_j = sorted_clones[idx].second->pos();
+        Eigen::Vector3d p_next = sorted_clones[idx + 1].second->pos();
+        Eigen::Vector3d v_global = (p_next - p_j) / dt;
+        Eigen::Matrix3d R_GtoI_j = sorted_clones[idx].second->Rot();
+        v_body = R_GtoI_j * v_global;
+      }
+      clone_vels.push_back({t_j, v_body, is_last});
+    }
+  }
+
+  // Build a lookup: clone_time → index in clone_vels
+  std::unordered_map<double, size_t> time_to_idx;
+  for (size_t i = 0; i < clone_vels.size(); i++) {
+    time_to_idx[clone_vels[i].time] = i;
+  }
+
+  Eigen::Vector3d g_sum = Eigen::Vector3d::Zero(); // control gradient accumulator
+  double f_sum = 0.0;                              // drift accumulator
+  double logdet_sum = 0.0;                         // average log-det accumulator
+  int s = 0;                                       // number of valid features
+
+  for (const auto &feat : feature_vec) {
+
+    // Get anchor pose (skip if the anchor frame is not in our current window)
+    auto cam_it = clones_cam.find(feat->anchor_cam_id);
+    if (cam_it == clones_cam.end())
+      continue;
+    auto anchor_it = cam_it->second.find(feat->anchor_clone_timestamp);
+    if (anchor_it == cam_it->second.end())
+      continue;
+    const Eigen::Matrix3d &R_GtoA = anchor_it->second.Rot();
+    const Eigen::Vector3d &p_AinG = anchor_it->second.pos();
+
+    // 1. Build information matrix M_i = Σ_j π_{i,j}
+    Eigen::Matrix3d M_i = Eigen::Matrix3d::Zero();
+    struct BearingEntry {
+      Eigen::Vector3d b;
+      Eigen::Matrix3d R_AtoCi;
+      Eigen::Vector3d p_CiinA;
+      double clone_time; // timestamp of this clone
+    };
+    std::vector<BearingEntry> entries;
+
+    for (const auto &pair : feat->timestamps) {
+      auto cam_clones_it = clones_cam.find(pair.first);
+      if (cam_clones_it == clones_cam.end())
+        continue;
+      for (size_t m = 0; m < pair.second.size(); m++) {
+        auto clone_it = cam_clones_it->second.find(pair.second.at(m));
+        if (clone_it == cam_clones_it->second.end())
+          continue; // measurement not at a clone time in the active window
+        const Eigen::Matrix3d &R_GtoCi = clone_it->second.Rot();
+        const Eigen::Vector3d &p_CiinG = clone_it->second.pos();
+
+        Eigen::Matrix3d R_AtoCi = R_GtoCi * R_GtoA.transpose();
+        Eigen::Vector3d p_CiinA = R_GtoA * (p_CiinG - p_AinG);
+
+        // Bearing in anchor frame (unit-normalized)
+        Eigen::Vector3d b_i;
+        b_i << feat->uvs_norm.at(pair.first).at(m)(0), feat->uvs_norm.at(pair.first).at(m)(1), 1;
+        b_i = R_AtoCi.transpose() * b_i;
+        b_i = b_i / b_i.norm(); // η = 1
+
+        Eigen::Matrix3d pi_j = Eigen::Matrix3d::Identity() - b_i * b_i.transpose();
+        M_i += pi_j;
+
+        entries.push_back({b_i, R_AtoCi, p_CiinA, pair.second.at(m)});
+      }
+    }
+
+    // 2. Check if M_i is invertible (sufficient parallax)
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd_Mi(M_i, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    double lambda_min = svd_Mi.singularValues()(2);
+    if (lambda_min < 1e-8)
+      continue; // rank-deficient, skip this feature
+
+    Eigen::Matrix3d M_inv = svd_Mi.solve(Eigen::Matrix3d::Identity());
+
+    // log(det(M_i)) = Σ log(singular values); M_i is symmetric PSD so singular = eigen values
+    double logdet_i = 0.0;
+    for (int k = 0; k < 3; k++)
+      logdet_i += std::log(svd_Mi.singularValues()(k));
+
+    // 3. Split contributions: g(x) from current pose, f(x) from past poses
+    Eigen::Vector3d g_feat = Eigen::Vector3d::Zero();
+    double f_feat = 0.0;
+
+    for (const auto &e : entries) {
+      double rho = (feat->p_FinA - e.p_CiinA).norm(); // Euclidean depth
+      if (rho < 1e-6)
+        continue;
+
+      Eigen::Matrix3d pi_j = Eigen::Matrix3d::Identity() - e.b * e.b.transpose();
+
+      // Check if this entry belongs to the current (latest) pose
+      auto it_vel = time_to_idx.find(e.clone_time);
+      bool is_current_pose = false;
+      if (it_vel != time_to_idx.end()) {
+        is_current_pose = clone_vels[it_vel->second].is_current;
+      }
+
+      if (is_current_pose) {
+        // ── g(x): control gradient (body frame) ──
+        // g_i = (2/ρ) (R_{Cn}^A R_B^C)^T π M^{-1} b
+        Eigen::Vector3d pi_Minv_b = pi_j * M_inv * e.b;
+        Eigen::Matrix3d R_AtoBody = R_CtoI * e.R_AtoCi;
+        g_feat += (1.0 / rho) * R_AtoBody * pi_Minv_b;
+      } else if (it_vel != time_to_idx.end()) {
+        // ── f(x): drift from past pose ──
+        // f_i += (2/ρ) bᵀ M^{-1} π R_{Cj}^A R_B^C v_{B,j}
+        const Eigen::Vector3d &v_body_j = clone_vels[it_vel->second].v_body;
+        // R_{Cj}^A · R_B^C · v_{B,j} = R_AtoCi^T · R_ItoC · v_{B,j}
+        Eigen::Vector3d vel_in_anchor = e.R_AtoCi.transpose() * R_ItoC * v_body_j;
+        Eigen::Vector3d Minv_pi_vel = M_inv * pi_j * vel_in_anchor;
+        double contrib = e.b.dot(Minv_pi_vel);
+        f_feat += (1.0 / rho) * contrib;
+      }
+    }
+    g_feat *= 2.0;
+    f_feat *= 2.0;
+
+    g_sum += g_feat;
+    f_sum += f_feat;
+    logdet_sum += logdet_i;
+    s++;
+  }
+
+  if (s > 0) {
+    out.mean_logdet = logdet_sum / s;
+    out.g_vec = g_sum / s;
+    out.drift = f_sum / s;
+    out.num_features = s;
+    out.valid = true;
+  }
+  return out;
+}
+
+UpdaterHelper::CbfOutput UpdaterHelper::smooth_cbf_metrics(const CbfOutput &raw, CbfEmaState &ema) {
+
+  CbfOutput smoothed;
+  if (!raw.valid)
+    return smoothed; // valid == false
+
+  // Apply EMA smoothing (weight alpha by feature count for stability)
+  if (!ema.initialized) {
+    ema.logdet = raw.mean_logdet;
+    ema.g = raw.g_vec;
+    ema.drift = raw.drift;
+    ema.initialized = true;
+  } else {
+    double alpha = std::min(1.0, ema.alpha * (raw.num_features / 10.0));
+    ema.logdet = alpha * raw.mean_logdet + (1.0 - alpha) * ema.logdet;
+    ema.g = alpha * raw.g_vec + (1.0 - alpha) * ema.g;
+    ema.drift = alpha * raw.drift + (1.0 - alpha) * ema.drift;
+  }
+
+  smoothed.mean_logdet = ema.logdet;
+  smoothed.g_vec = ema.g;
+  smoothed.drift = ema.drift;
+  smoothed.num_features = raw.num_features;
+  smoothed.valid = true;
+  return smoothed;
 }

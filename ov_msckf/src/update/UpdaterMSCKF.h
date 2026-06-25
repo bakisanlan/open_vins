@@ -27,6 +27,7 @@
 
 #include "feat/FeatureInitializerOptions.h"
 
+#include "UpdaterHelper.h"
 #include "UpdaterOptions.h"
 
 namespace ov_core {
@@ -48,19 +49,8 @@ class State;
 class UpdaterMSCKF {
 
 public:
-  /**
-   * @brief CBF observability metrics computed during each MSCKF update.
-   *
-   * These values are set by update() and can be read by VioManager/ROS2Visualizer
-   * for publishing as ROS topics.
-   */
-  struct CbfOutput {
-    double mean_logdet = 0.0;            ///< Average log-det metric: ℓ̄ = (1/s) Σ log(det(M_i))
-    Eigen::Vector3d g_vec = Eigen::Vector3d::Zero(); ///< CBF control gradient g(x) in body (IMU) frame
-    double drift = 0.0;                  ///< CBF drift f(x) from past poses
-    int num_features = 0;                ///< Number of features used in the CBF computation
-    bool valid = false;                  ///< True if CBF metrics were successfully computed
-  };
+  /// CBF observability metrics (shared definition; see UpdaterHelper::CbfOutput)
+  using CbfOutput = UpdaterHelper::CbfOutput;
 
   /**
    * @brief Default constructor for our MSCKF updater
@@ -85,7 +75,7 @@ public:
   const CbfOutput &get_cbf_output() const { return _cbf_output; }
 
   /// Set the EMA smoothing factor for CBF metrics (0=full smooth, 1=no smooth)
-  void set_ema_alpha(double alpha) { _ema_alpha = alpha; }
+  void set_ema_alpha(double alpha) { _cbf_ema.alpha = alpha; }
 
 protected:
   /// Options used during update
@@ -101,12 +91,7 @@ protected:
   CbfOutput _cbf_output;
 
   /// EMA state for smoothing CBF metrics
-  bool _ema_initialized = false;
-  double _ema_logdet = 0.0;
-  double _ema_drift = 0.0;
-  Eigen::Vector3d _ema_g = Eigen::Vector3d::Zero();
-  static constexpr double _ema_alpha_default = 0.1;
-  double _ema_alpha = _ema_alpha_default; ///< EMA smoothing factor (0=full smooth, 1=no smooth)
+  UpdaterHelper::CbfEmaState _cbf_ema;
 };
 
 } // namespace ov_msckf

@@ -582,6 +582,13 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   propagator->invalidate_cache();
   rT4 = boost::posix_time::microsec_clock::local_time();
 
+  // Triangulation-aware CBF metric (TANGO-VIO).
+  // When enabled, compute the observability metric over the full set of persistent
+  // SLAM features tracked into this frame (before the batched update consumes them).
+  if (params.slam_options.cbf_use_slam_features) {
+    updaterSLAM->compute_cbf(state, feats_slam_UPDATE);
+  }
+
   // Perform SLAM delay init and update
   // NOTE: that we provide the option here to do a *sequential* update
   // NOTE: this will be a lot faster but won't be as accurate.
@@ -769,4 +776,14 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   }
 }
 
-UpdaterMSCKF::CbfOutput VioManager::get_cbf_output() { return updaterMSCKF->get_cbf_output(); }
+UpdaterMSCKF::CbfOutput VioManager::get_cbf_output() {
+  // The CBF metric is computed by whichever updater the config selects
+  if (params.slam_options.cbf_use_slam_features)
+    return updaterSLAM->get_cbf_output();
+  return updaterMSCKF->get_cbf_output();
+}
+
+void VioManager::set_cbf_ema_alpha(double alpha) {
+  updaterMSCKF->set_ema_alpha(alpha);
+  updaterSLAM->set_ema_alpha(alpha);
+}
