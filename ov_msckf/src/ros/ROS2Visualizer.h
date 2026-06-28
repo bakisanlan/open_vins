@@ -118,6 +118,9 @@ public:
   /// Callback for barometric pressure information
   void callback_baro(const sensor_msgs::msg::FluidPressure::SharedPtr msg);
 
+  /// Callback for MAVROS relative altitude (used to correct home altitude offset)
+  void callback_rel_alt(const std_msgs::msg::Float64::SharedPtr msg);
+
   /// Callback for monocular cameras information
   void callback_monocular(const sensor_msgs::msg::Image::SharedPtr msg0, int cam_id0);
 
@@ -260,11 +263,21 @@ protected:
   double baro_ref_pressure = -1.0;
 
   // GPS origin and home setup (triggered once on first baro reading)
+  bool set_home_origin = false;  // if true, publish GPS origin and call set_home on first baro reading
   bool origin_home_set = false;
   double home_latitude = 41.1006384902323;
   double home_longitude = 29.02551275632911;
   rclcpp::Publisher<geographic_msgs::msg::GeoPointStamped>::SharedPtr pub_gp_origin;
   rclcpp::Client<mavros_msgs::srv::CommandHome>::SharedPtr srv_set_home;
+  rclcpp::CallbackGroup::SharedPtr srv_callback_group;  // separate thread for service calls
+
+  // Rel-alt subscriber and home correction state
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr sub_rel_alt;
+  bool first_home_set = false;       // true after the first set_home service call succeeds
+  bool home_corrected = false;       // true after corrections are done (converged or max attempts)
+  double home_altitude_used = 0.0;   // the altitude value used in the last set_home call
+  int rel_alt_wait_count = 0;        // messages received since home set / last correction
+  int home_correction_attempt = 0;   // number of correction attempts made
 };
 
 } // namespace ov_msckf

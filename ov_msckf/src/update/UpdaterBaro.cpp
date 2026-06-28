@@ -56,9 +56,9 @@ bool UpdaterBaro::try_update(std::shared_ptr<State> state, double timestamp, dou
   double chi2 = res.dot(S.llt().solve(res));
 
   
-  PRINT_INFO(CYAN "[BARO]: accepted altitude update | res: %.3f m | (chi2 %.3f < %.3f)\n" RESET, res(0), chi2, _options.chi2_multipler * chi_squared_value);
-  // STATE AND BAROMETER READING
-  PRINT_INFO(CYAN "[BARO]: state altitude: %.3f m | baro reading: %.3f m\n" RESET, state->_imu->pos()(2), measured_altitude);
+  // PRINT_DEBUG(CYAN "[BARO]: accepted altitude update | res: %.3f m | (chi2 %.3f < %.3f)\n" RESET, res(0), chi2, _options.chi2_multipler * chi_squared_value);
+  // // STATE AND BAROMETER READING
+  // PRINT_DEBUG(CYAN "[BARO]: state altitude: %.3f m | baro reading: %.3f m\n" RESET, state->_imu->pos()(2), measured_altitude);
   
 
   // Check if we pass the chi-square test

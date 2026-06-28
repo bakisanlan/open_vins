@@ -625,7 +625,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
   //===================================================================================
 
   if (!baro_queue.empty()) {
-    PRINT_INFO(CYAN "[BARO QUEUE]: size=%zu, front_time=%.4f, state_time=%.4f, diff=%.4f\n" RESET,
+    PRINT_DEBUG(CYAN "[BARO QUEUE]: size=%zu, front_time=%.4f, state_time=%.4f, diff=%.4f\n" RESET,
                baro_queue.size(), baro_queue.front().first, state->_timestamp,
                baro_queue.front().first - state->_timestamp);
   }
@@ -636,7 +636,7 @@ void VioManager::do_feature_propagate_update(const ov_core::CameraData &message)
 
     bool baro_update_success = updaterBaro->try_update(state, baro_time, baro_alt);
     if (baro_update_success) {
-      PRINT_INFO(CYAN "[BARO]: Applied update spanning time %.3f with tracking frame at %.3f.\n" RESET, baro_time, state->_timestamp);
+      PRINT_DEBUG(CYAN "[BARO]: Applied update spanning time %.3f with tracking frame at %.3f.\n" RESET, baro_time, state->_timestamp);
     }
     baro_queue.erase(baro_queue.begin());
   }

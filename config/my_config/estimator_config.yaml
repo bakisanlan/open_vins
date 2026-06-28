@@ -46,8 +46,9 @@ mag_yaw_update_rate: 10.0      # Hz throttle rate
 mag_yaw_topic: "/mavros/imu/data"
 
 # Home position (lat/lon for GPS origin and ArduPilot home, altitude from barometer MSL)
-home_latitude: 45.1006384902323
-home_longitude: 29.02551275632911
+set_home_origin: true  # if true, publish GPS origin and call set_home on first baro reading
+home_latitude: 41.1001604  #41.1006384902323
+home_longitude: 29.0256332 #29.02551275632911
 
 # ==================================================================
 # ==================================================================
@@ -94,7 +95,7 @@ filepath_gt: "/tmp/ov_groundtruth.txt"
 # our front-end feature tracking parameters
 # we have a KLT and descriptor based (KLT is better implemented...)
 use_klt: true # if true we will use KLT, otherwise use a ORB descriptor + robust matching
-num_pts: 200 # number of points (per camera) we will extract and try to track
+num_pts: 150 # number of points (per camera) we will extract and try to track
 #num_pts_cam0: 200         # wide-angle: more features
 #num_pts_cam1: 100         # narrow-angle: fewer features
 fast_threshold: 31 # threshold for fast extraction (warning: lower threshs can be expensive)
@@ -104,7 +105,7 @@ min_px_dist: 10 # distance between features (features near each other provide le
 knn_ratio: 0.65 # descriptor knn threshold for the top two descriptor matches
 track_frequency: 31.0 # frequency we will perform feature tracking at (in frames per second / hertz)
 downsample_cameras: false # will downsample image in half if true
-num_opencv_threads: 4 # -1: auto, 0-1: serial, >1: number of threads
+num_opencv_threads: 2 # -1: auto, 0-1: serial, >1: number of threads
 histogram_method: "HISTOGRAM" # NONE, HISTOGRAM, CLAHE
 
 # aruco tag tracker for the system

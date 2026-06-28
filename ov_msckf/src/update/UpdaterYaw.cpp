@@ -207,7 +207,7 @@ bool UpdaterYaw::try_update(std::shared_ptr<State> state, double timestamp) {
   Eigen::Matrix3d R_ItoG_post = state->_imu->Rot().transpose();
   double yaw_post = std::atan2(R_ItoG_post(1, 0), R_ItoG_post(0, 0));
 
-  PRINT_INFO(CYAN "[YAW]: res=%.1f deg, chi2=%.1f, yaw_est=%.1f→%.1f deg, yaw_mag=%.1f deg, P_yaw=%.2f deg, S=%.2f deg\n" RESET,
+  PRINT_DEBUG(CYAN "[YAW]: res=%.1f deg, chi2=%.1f, yaw_est=%.1f→%.1f deg, yaw_mag=%.1f deg, P_yaw=%.2f deg, S=%.2f deg\n" RESET,
              res_yaw * 180.0 / M_PI, chi2, yaw_est * 180.0 / M_PI, yaw_post * 180.0 / M_PI, yaw_meas.yaw * 180.0 / M_PI, P_yaw_std_deg,
              yaw_std_deg);
 

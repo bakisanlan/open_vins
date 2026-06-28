@@ -250,14 +250,29 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
     PRINT_INFO("subscribing to MAVROS GT: %s\n", topic_mavros_gt.c_str());
   }
 
+  // Read whether to set GPS origin and home on first baro reading
+  parser->parse_config("set_home_origin", set_home_origin, false);
+  PRINT_INFO("set_home_origin: %s\n", set_home_origin ? "true" : "false");
+
   // Read home lat/lon from config (used for setting GPS origin and home on first baro reading)
   parser->parse_config("home_latitude", home_latitude, false);
   parser->parse_config("home_longitude", home_longitude, false);
   PRINT_INFO("Home position: lat=%.10f, lon=%.10f\n", home_latitude, home_longitude);
 
   // Create publisher for GPS origin and service client for set_home
+  // IMPORTANT: Use a separate callback group so the service response can be processed
+  // even while a subscriber callback (e.g. callback_baro) is blocking on future.wait_for().
+  // Without this, the single-threaded executor deadlocks because it can't process the
+  // service response while the baro callback is waiting for it.
   pub_gp_origin = _node->create_publisher<geographic_msgs::msg::GeoPointStamped>("/mavros/global_position/set_gp_origin", 2);
-  srv_set_home = _node->create_client<mavros_msgs::srv::CommandHome>("/mavros/cmd/set_home");
+  srv_callback_group = _node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  srv_set_home = _node->create_client<mavros_msgs::srv::CommandHome>("/mavros/cmd/set_home",
+      rmw_qos_profile_services_default, srv_callback_group);
+
+  // Subscribe to rel_alt so we can correct the home altitude after the first set_home
+  sub_rel_alt = _node->create_subscription<std_msgs::msg::Float64>(
+      "/mavros/global_position/rel_alt", rclcpp::SensorDataQoS(),
+      std::bind(&ROS2Visualizer::callback_rel_alt, this, std::placeholders::_1));
 }
 
 void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::SharedPtr msg) {
@@ -265,45 +280,91 @@ void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::Shared
   double pressure = msg->fluid_pressure; // in Pascals
 
   // On the very first baro reading, compute MSL altitude and set GPS origin + home
-  if (!origin_home_set) {
+  if (set_home_origin && !origin_home_set) {
     origin_home_set = true;
 
     // Compute MSL altitude from barometric formula using standard sea-level pressure (101325 Pa)
     double altitude_msl = 0.0; // TODO: was 44330.0 * (1.0 - std::pow(pressure / 101325.0, 1.0 / 5.255));
     PRINT_INFO(CYAN "[BARO]: First reading %.2f Pa -> MSL altitude %.2f m\n" RESET, pressure, altitude_msl);
 
-    // Publish GPS origin
+    // Build GPS origin message
     geographic_msgs::msg::GeoPointStamped origin_msg;
-    origin_msg.header.stamp = _node->now();
     origin_msg.header.frame_id = "map";
     origin_msg.position.latitude = home_latitude;
     origin_msg.position.longitude = home_longitude;
     origin_msg.position.altitude = altitude_msl;
-    pub_gp_origin->publish(origin_msg);
-    PRINT_INFO(CYAN "[BARO]: Published GPS origin: lat=%.10f, lon=%.10f, alt=%.2f\n" RESET,
-               home_latitude, home_longitude, altitude_msl);
 
-    // Call set_home service asynchronously
+    // Publish GPS origin with retry: wait for subscriber and publish multiple times
+    // MAVROS may not have subscribed yet, so we retry until we confirm at least one subscriber
+    const int max_origin_retries = 10;
+    const int publish_burst = 3; // publish multiple times per attempt for reliability
+    bool origin_delivered = false;
+    for (int attempt = 0; attempt < max_origin_retries; attempt++) {
+      origin_msg.header.stamp = _node->now();
+      size_t sub_count = pub_gp_origin->get_subscription_count();
+      for (int b = 0; b < publish_burst; b++) {
+        pub_gp_origin->publish(origin_msg);
+      }
+      PRINT_INFO(CYAN "[BARO]: GPS origin publish attempt %d/%d (subscribers=%zu): lat=%.10f, lon=%.10f, alt=%.2f\n" RESET,
+                 attempt + 1, max_origin_retries, sub_count, home_latitude, home_longitude, altitude_msl);
+      if (sub_count > 0) {
+        origin_delivered = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    if (!origin_delivered) {
+      // Final burst even if no subscriber detected — MAVROS might still pick it up
+      PRINT_WARNING(YELLOW "[BARO]: No subscriber detected after %d attempts, publishing final burst anyway\n" RESET, max_origin_retries);
+      for (int b = 0; b < publish_burst; b++) {
+        origin_msg.header.stamp = _node->now();
+        pub_gp_origin->publish(origin_msg);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+    }
+
+    // Wait for the autopilot to receive and process the GPS origin before setting home
+    PRINT_INFO(CYAN "[BARO]: Waiting 5 seconds for autopilot to accept GPS origin...\n" RESET);
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    // Call set_home service with retry
     auto request = std::make_shared<mavros_msgs::srv::CommandHome::Request>();
     request->current_gps = false;
     request->yaw = 0.0;
     request->latitude = home_latitude;
     request->longitude = home_longitude;
     request->altitude = altitude_msl;
-    if (srv_set_home->wait_for_service(std::chrono::seconds(2))) {
-      auto future = srv_set_home->async_send_request(request,
-          [this](rclcpp::Client<mavros_msgs::srv::CommandHome>::SharedFuture result) {
-            auto response = result.get();
-            if (response->success) {
-              PRINT_INFO(CYAN "[BARO]: Set home succeeded\n" RESET);
-            } else {
-              PRINT_WARNING(YELLOW "[BARO]: Set home failed, result=%d\n" RESET, response->result);
-            }
-          });
-      PRINT_INFO(CYAN "[BARO]: Set home request sent: lat=%.10f, lon=%.10f, alt=%.2f\n" RESET,
-                 home_latitude, home_longitude, altitude_msl);
-    } else {
-      PRINT_WARNING(YELLOW "[BARO]: /mavros/cmd/set_home service not available, skipping\n" RESET);
+
+    const int max_home_retries = 3;
+    for (int attempt = 0; attempt < max_home_retries; attempt++) {
+      if (!srv_set_home->wait_for_service(std::chrono::seconds(2))) {
+        PRINT_WARNING(YELLOW "[BARO]: /mavros/cmd/set_home service not available (attempt %d/%d)\n" RESET,
+                     attempt + 1, max_home_retries);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        continue;
+      }
+      // Use synchronous-style wait so we can retry on failure
+      auto future = srv_set_home->async_send_request(request);
+      auto status = future.wait_for(std::chrono::seconds(5));
+      if (status == std::future_status::ready) {
+        auto response = future.get();
+        if (response->success) {
+          PRINT_INFO(CYAN "[BARO]: Set home succeeded (attempt %d/%d)\n" RESET, attempt + 1, max_home_retries);
+          first_home_set = true;
+          home_altitude_used = altitude_msl;
+          break;
+        } else {
+          PRINT_WARNING(YELLOW "[BARO]: Set home failed result=%d (attempt %d/%d)\n" RESET,
+                       response->result, attempt + 1, max_home_retries);
+        }
+      } else {
+        PRINT_WARNING(YELLOW "[BARO]: Set home request timed out (attempt %d/%d)\n" RESET,
+                     attempt + 1, max_home_retries);
+      }
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    if (!first_home_set) {
+      PRINT_WARNING(RED "[BARO]: Failed to set home after %d attempts!\n" RESET, max_home_retries);
     }
   }
 
@@ -323,7 +384,7 @@ void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::Shared
   }
 
   // Print info 
-  PRINT_INFO(CYAN "[BARO]: Pressure %.2f Pa at %.4f seconds\n" RESET, pressure, timestamp);
+  PRINT_DEBUG(CYAN "[BARO]: Pressure %.2f Pa at %.4f seconds\n" RESET, pressure, timestamp);
 
   // Convert pressure to relative altitude using the barometric formula
   // Altitude = 44330.0 * (1.0 - (P / P0)^(1/5.255))
@@ -331,6 +392,80 @@ void ROS2Visualizer::callback_baro(const sensor_msgs::msg::FluidPressure::Shared
 
   // Feed baro measurement into the VIO manager
   _app->feed_measurement_baro(timestamp, altitude);
+}
+
+void ROS2Visualizer::callback_rel_alt(const std_msgs::msg::Float64::SharedPtr msg) {
+  // Skip if home/origin setting is disabled
+  if (!set_home_origin)
+    return;
+  // Wait until the first set_home has succeeded
+  if (!first_home_set)
+    return;
+  // Already fully corrected (converged or max attempts)
+  if (home_corrected)
+    return;
+
+  // Count messages since home set or last correction to allow stabilization
+  // rel_alt at ~10 Hz, so 30 messages ≈ 3 seconds
+  rel_alt_wait_count++;
+  const int stabilization_count = 30;
+  if (rel_alt_wait_count < stabilization_count)
+    return;
+
+  const int max_corrections = 3;
+  double rel_alt_offset = msg->data;
+  home_correction_attempt++;
+
+  PRINT_INFO(CYAN "[REL_ALT]: Correction check %d/%d: rel_alt = %.2f m\n" RESET,
+             home_correction_attempt, max_corrections, rel_alt_offset);
+
+  // If rel_alt is already near zero, home altitude is correct
+  if (std::abs(rel_alt_offset) < 0.5) {
+    PRINT_INFO(CYAN "[REL_ALT]: rel_alt near zero (%.2f m), home altitude is correct\n" RESET, rel_alt_offset);
+    home_corrected = true;
+    return;
+  }
+
+  // Max corrections reached — accept current state
+  if (home_correction_attempt >= max_corrections) {
+    PRINT_WARNING(YELLOW "[REL_ALT]: Max correction attempts (%d) reached, rel_alt still %.2f m\n" RESET,
+                  max_corrections, rel_alt_offset);
+    home_corrected = true;
+    return;
+  }
+
+  // Correct the home altitude and call set_home again
+  double corrected_altitude = home_altitude_used + rel_alt_offset;
+  PRINT_INFO(CYAN "[REL_ALT]: Correcting home altitude: %.2f -> %.2f (offset %.2f m)\n" RESET,
+             home_altitude_used, corrected_altitude, rel_alt_offset);
+
+  auto request = std::make_shared<mavros_msgs::srv::CommandHome::Request>();
+  request->current_gps = false;
+  request->yaw = 0.0;
+  request->latitude = home_latitude;
+  request->longitude = home_longitude;
+  request->altitude = corrected_altitude;
+
+  if (srv_set_home->wait_for_service(std::chrono::seconds(2))) {
+    auto future = srv_set_home->async_send_request(request);
+    auto status = future.wait_for(std::chrono::seconds(5));
+    if (status == std::future_status::ready) {
+      auto response = future.get();
+      if (response->success) {
+        PRINT_INFO(CYAN "[REL_ALT]: Corrected set_home succeeded (alt=%.2f)\n" RESET, corrected_altitude);
+        home_altitude_used = corrected_altitude;
+      } else {
+        PRINT_WARNING(YELLOW "[REL_ALT]: Corrected set_home failed, result=%d\n" RESET, response->result);
+      }
+    } else {
+      PRINT_WARNING(YELLOW "[REL_ALT]: Corrected set_home timed out\n" RESET);
+    }
+  } else {
+    PRINT_WARNING(YELLOW "[REL_ALT]: /mavros/cmd/set_home service not available\n" RESET);
+  }
+
+  // Reset wait counter so we wait for stabilization before next check
+  rel_alt_wait_count = 0;
 }
 
 void ROS2Visualizer::visualize() {
