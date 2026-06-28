@@ -1,0 +1,24 @@
+[Unit]
+Description=VIO Macro ROS 2 Stack (camera driver + runner + system monitor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ituarc
+Group=ituarc
+WorkingDirectory=/home/ituarc/Desktop/vio_macro/run
+ExecStart=/bin/bash /home/ituarc/Desktop/vio_macro/run/setup_macro_nomavros_ssh_service.sh
+ExecStop=/usr/bin/tmux kill-session -t ros2stack
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment (ensure ROS domain and locale are set)
+Environment="HOME=/home/ituarc"
+Environment="ROS_DOMAIN_ID=0"
+Environment="LANG=en_US.UTF-8"
+
+[Install]
+WantedBy=multi-user.target
