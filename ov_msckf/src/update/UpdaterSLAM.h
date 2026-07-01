@@ -27,7 +27,6 @@
 
 #include "feat/FeatureInitializerOptions.h"
 
-#include "UpdaterHelper.h"
 #include "UpdaterOptions.h"
 
 namespace ov_core {
@@ -87,25 +86,6 @@ public:
    */
   void change_anchors(std::shared_ptr<State> state);
 
-  /**
-   * @brief Computes the triangulation-aware CBF metric over the persistent SLAM feature set.
-   *
-   * This is the TANGO-VIO observability metric (average log-det of the per-feature
-   * triangulation information matrices, plus the CBF drift/gradient). It is computed
-   * over the full set of currently-tracked SLAM features (not per-update-batch), and
-   * is only active when UpdaterOptions::cbf_use_slam_features is true.
-   *
-   * @param state State of the filter
-   * @param feature_vec The complete set of SLAM features tracked into the current frame
-   */
-  void compute_cbf(std::shared_ptr<State> state, const std::vector<std::shared_ptr<ov_core::Feature>> &feature_vec);
-
-  /// Accessor for the latest CBF output (computed during the last compute_cbf() call)
-  const UpdaterHelper::CbfOutput &get_cbf_output() const { return _cbf_output; }
-
-  /// Set the EMA smoothing factor for CBF metrics (0=full smooth, 1=no smooth)
-  void set_ema_alpha(double alpha) { _cbf_ema.alpha = alpha; }
-
 protected:
   /**
    * @brief Shifts landmark anchor to new clone
@@ -128,12 +108,6 @@ protected:
 
   /// Chi squared 95th percentile table (lookup would be size of residual)
   std::map<int, double> chi_squared_table;
-
-  /// Latest CBF output from the most recent compute_cbf() call
-  UpdaterHelper::CbfOutput _cbf_output;
-
-  /// EMA state for smoothing CBF metrics
-  UpdaterHelper::CbfEmaState _cbf_ema;
 };
 
 } // namespace ov_msckf

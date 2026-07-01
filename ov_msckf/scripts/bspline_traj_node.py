@@ -35,8 +35,82 @@ from std_msgs.msg import String
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Trajectory class (pure math, no ROS dependency)
+# Trajectories (pure math, no ROS dependency)
 # ══════════════════════════════════════════════════════════════════════════
+class StraightTrajectory:
+    """Straight line trajectory from origin along the +X axis.
+    
+    Travels a given distance at a constant speed, then stops (v=0).
+    """
+    def __init__(self, distance: float, speed: float):
+        self.distance = distance
+        self.speed = speed
+        self.duration = distance / speed
+        self.period = self.duration * 2  # Plotting compatibility
+        self.total_length = distance
+
+    def evaluate(self, t: float):
+        """Return (pos_3d, vel_3d) at wall-clock time *t* (seconds)."""
+        if t < self.duration:
+            pos = np.array([self.speed * t, 0.0, 0.0])
+            vel = np.array([self.speed, 0.0, 0.0])
+        else:
+            pos = np.array([self.distance, 0.0, 0.0])
+            vel = np.zeros(3)
+        return pos, vel
+
+class ClimbingStraightTrajectory:
+    """Straight line with simultaneous climb along the body Z axis.
+
+    Moves forward at *speed* along the drone's heading (+X in trajectory frame)
+    while climbing at *climb_speed* along +Z.  No lateral component.
+    After covering *distance* horizontally the drone stops completely (v=0).
+    """
+    def __init__(self, distance: float, speed: float, climb_speed: float = 1.0):
+        self.distance = distance
+        self.speed = speed
+        self.climb_speed = climb_speed
+        self.duration = distance / speed
+        self.climb_total = climb_speed * self.duration
+        self.period = self.duration * 2   # plotting compatibility
+        self.total_length = distance
+
+    def evaluate(self, t: float):
+        """Return (pos_3d, vel_3d) at wall-clock time *t*."""
+        if t < self.duration:
+            pos = np.array([self.speed * t, 0.0, self.climb_speed * t])
+            vel = np.array([self.speed, 0.0, self.climb_speed])
+        else:
+            pos = np.array([self.distance, 0.0, self.climb_total])
+            vel = np.zeros(3)
+        return pos, vel
+
+class CircleTrajectory:
+    """Continuous circular trajectory starting from the origin.
+    
+    Initially moves along the +X axis, curves towards +Y.
+    """
+    def __init__(self, radius: float, speed: float):
+        self.radius = radius
+        self.speed = speed
+        self.omega = speed / radius
+        self.period = 2.0 * np.pi * radius / speed
+        self.total_length = 2.0 * np.pi * radius
+
+    def evaluate(self, t: float):
+        """Return (pos_3d, vel_3d) at wall-clock time *t* (seconds)."""
+        pos = np.array([
+            self.radius * np.sin(self.omega * t),
+            self.radius * (1.0 - np.cos(self.omega * t)),
+            0.0
+        ])
+        vel = np.array([
+            self.speed * np.cos(self.omega * t),
+            self.speed * np.sin(self.omega * t),
+            0.0
+        ])
+        return pos, vel
+
 class BSplineTrajectory:
     """Smooth closed-loop trajectory from waypoints using periodic cubic B-splines.
 
@@ -73,6 +147,9 @@ class BSplineTrajectory:
 
         # Period of one full loop
         self.period = self.total_length / self.speed
+        
+        # Calculate offset at t=0 so evaluation starts at (0,0)
+        self.start_offset = np.array([float(self._spl_x(0.0)), float(self._spl_y(0.0)), 0.0])
 
     # ------------------------------------------------------------------
     def evaluate(self, t: float):
@@ -80,12 +157,16 @@ class BSplineTrajectory:
 
         pos is [x, y, 0] in the local waypoint frame.
         vel is [vx, vy, 0] in the same frame.
+        After one full loop the drone stops at the starting position.
         """
+        if t >= self.period:
+            return np.zeros(3), np.zeros(3)
+
         s = (t / self.period) % 1.0           # normalised parameter
         dsdt = 1.0 / self.period              # ds/dt = speed / L
 
-        px = float(self._spl_x(s))
-        py = float(self._spl_y(s))
+        px = float(self._spl_x(s)) - self.start_offset[0]
+        py = float(self._spl_y(s)) - self.start_offset[1]
         vx = float(self._spl_x(s, nu=1)) * dsdt
         vy = float(self._spl_y(s, nu=1)) * dsdt
 
@@ -112,10 +193,12 @@ class BSplineTrajectory:
         # ── Panel 1: 2D path ──
         ax = axes[0]
         ax.plot(positions[:, 0], positions[:, 1], 'b-', lw=2, label='B-spline path')
-        ax.plot(self.waypoints[:, 0], self.waypoints[:, 1],
+        # Waypoints must be offset for plotting alignment
+        waypoints_offset = self.waypoints - self.start_offset[:2]
+        ax.plot(waypoints_offset[:, 0], waypoints_offset[:, 1],
                 'ro', ms=8, zorder=5, label='Waypoints')
         # Mark corners (every other point since midpoints are interleaved)
-        corners = self.waypoints[::2]
+        corners = waypoints_offset[::2]
         for i, c in enumerate(corners[:-1]):  # skip duplicate closing point
             ax.annotate(f'WP{i}', (c[0], c[1]), textcoords='offset points',
                         xytext=(8, 8), fontsize=9, fontweight='bold')
@@ -147,7 +230,7 @@ class BSplineTrajectory:
         sc = ax.scatter(positions[:, 0], positions[:, 1],
                         c=speed, cmap='coolwarm', s=8, zorder=3)
         plt.colorbar(sc, ax=ax, label='Speed (m/s)')
-        ax.plot(self.waypoints[:, 0], self.waypoints[:, 1],
+        ax.plot(waypoints_offset[:, 0], waypoints_offset[:, 1],
                 'ko', ms=5, zorder=5)
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
@@ -165,19 +248,7 @@ class BSplineTrajectory:
     # ------------------------------------------------------------------
     @staticmethod
     def make_square(side_length: float, speed: float = 3.0):
-        """Factory: square trajectory with midpoints for shape fidelity.
-
-        Without midpoints, a cubic B-spline through only 4 corners produces
-        a very rounded shape.  Adding midpoints along each side keeps the
-        sides nearly straight while still rounding the corners smoothly.
-
-        Square layout (top-down, starting at origin):
-
-            WP3 ←──────── WP2
-             │              │
-             │              │
-            WP0 ─────────→ WP1
-        """
+        """Factory: square trajectory with midpoints for shape fidelity."""
         L = side_length
         waypoints = np.array([
             [0.0,  0.0],        # WP0 — corner
@@ -204,8 +275,11 @@ class BSplineTrajectoryNode(Node):
 
         # ── Parameters ──
         self.declare_parameter("traj_enabled",      False)
+        self.declare_parameter("traj_type",         "square")
         self.declare_parameter("side_length",       20.0)    # m
+        self.declare_parameter("radius",            30.0)    # m
         self.declare_parameter("speed",             3.0)     # m/s
+        self.declare_parameter("climb_speed",       1.0)     # m/s vertical
         self.declare_parameter("kp",                0.5)     # position feedback gain
         self.declare_parameter("rate",              20.0)    # Hz
         self.declare_parameter("hold_altitude",     True)    # no z correction
@@ -213,8 +287,11 @@ class BSplineTrajectoryNode(Node):
         self.declare_parameter("topic_sub_odom",    "odomimu")
 
         self.enabled     = self.get_parameter("traj_enabled").value
+        self.traj_type   = self.get_parameter("traj_type").value
         side             = self.get_parameter("side_length").value
+        radius           = self.get_parameter("radius").value
         speed            = self.get_parameter("speed").value
+        climb_speed      = self.get_parameter("climb_speed").value
         self.kp          = self.get_parameter("kp").value
         rate             = self.get_parameter("rate").value
         self.hold_z      = self.get_parameter("hold_altitude").value
@@ -222,7 +299,15 @@ class BSplineTrajectoryNode(Node):
         topic_sub_odom   = self.get_parameter("topic_sub_odom").value
 
         # ── Build trajectory ──
-        self.traj = BSplineTrajectory.make_square(side, speed)
+        if self.traj_type == "straight":
+            self.traj = StraightTrajectory(side, speed)
+        elif self.traj_type == "climb":
+            self.traj = ClimbingStraightTrajectory(side, speed, climb_speed)
+            self.hold_z = False  # must pass Z velocity through
+        elif self.traj_type == "circle":
+            self.traj = CircleTrajectory(radius, speed)
+        else:
+            self.traj = BSplineTrajectory.make_square(side, speed)
 
         # ── State ──
         self.origin      = None          # starting position (global frame)
@@ -247,9 +332,9 @@ class BSplineTrajectoryNode(Node):
         self.timer = self.create_timer(1.0 / rate, self._timer_cb)
 
         self.get_logger().info(
-            f"B-Spline Traj: side={side:.1f}m  speed={speed:.1f}m/s  "
-            f"Kp={self.kp:.2f}  period={self.traj.period:.1f}s  "
-            f"enabled={self.enabled}"
+            f"Trajectory Node: type={self.traj_type} dist/side={side:.1f}m rad={radius:.1f}m "
+            f"speed={speed:.1f}m/s climb={climb_speed:.1f}m/s "
+            f"Kp={self.kp:.2f} hold_z={self.hold_z} enabled={self.enabled}"
         )
 
     # ------------------------------------------------------------------
@@ -259,37 +344,43 @@ class BSplineTrajectoryNode(Node):
         self.current_pos = np.array([p.x, p.y, p.z])
 
         q = msg.pose.pose.orientation
-        if (q.x**2 + q.y**2 + q.z**2 + q.w**2) < 1e-10:
+        qvec = [q.x, q.y, q.z, q.w]
+        if np.any(np.isnan(qvec)) or (q.x**2 + q.y**2 + q.z**2 + q.w**2) < 1e-10:
             return  # uninitialised quaternion
-        rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
+        rot = Rotation.from_quat(qvec)
         self.R_GtoI = rot.as_matrix().T          # R_ItoG → R_GtoI
-
-        # Lock origin on first valid message
-        if self.origin is None:
-            self.origin = self.current_pos.copy()
-            self.get_logger().info(
-                f"Origin locked: [{self.origin[0]:.2f}, "
-                f"{self.origin[1]:.2f}, {self.origin[2]:.2f}]"
-            )
 
     # ------------------------------------------------------------------
     def _timer_cb(self):
         """Evaluate trajectory and publish body-frame velocity command."""
-        if not self.enabled or self.origin is None or self.current_pos is None:
+        if not self.enabled or self.current_pos is None:
             return
 
         # Start clock on first enabled tick
         if self.t_start is None:
             self.t_start = self.get_clock().now().nanoseconds * 1e-9
-            self.get_logger().info("Trajectory tracking started!")
+            # Lock origin and rotation precisely when trajectory is enabled
+            self.origin = self.current_pos.copy()
+            if self.traj_type in ["straight", "circle", "climb"]:
+                # Align to the drone's *current heading*
+                self.R_traj_to_G = self.R_GtoI.T.copy()
+            else:
+                # Square trajectory runs in the standard OpenVINS global frame
+                self.R_traj_to_G = np.eye(3)
+                
+            self.get_logger().info(
+                f"Trajectory tracking started! Origin: "
+                f"[{self.origin[0]:.2f}, {self.origin[1]:.2f}, {self.origin[2]:.2f}]"
+            )
 
         t = self.get_clock().now().nanoseconds * 1e-9 - self.t_start
 
-        # ── Desired state from B-spline ──
+        # ── Desired state from trajectory (local trajectory frame) ──
         p_des_local, v_des_local = self.traj.evaluate(t)
 
-        # Shift to global frame
-        p_des_global = self.origin + p_des_local
+        # Shift to global frame (rotate by initial heading if straight)
+        p_des_global = self.origin + self.R_traj_to_G @ p_des_local
+        v_des_global = self.R_traj_to_G @ v_des_local
 
         # ── Position error in global frame ──
         e_pos = p_des_global - self.current_pos
@@ -297,7 +388,7 @@ class BSplineTrajectoryNode(Node):
             e_pos[2] = 0.0
 
         # ── Velocity command: feedforward + proportional feedback ──
-        v_cmd_global = v_des_local + 0* self.kp * e_pos
+        v_cmd_global = v_des_global +0* self.kp * e_pos
 
         # ── Rotate to body (IMU) frame ──
         v_cmd_body = self.R_GtoI @ v_cmd_global

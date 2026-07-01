@@ -173,13 +173,6 @@ struct VioManagerOptions {
       slam_options.sigma_pix_sq = std::pow(slam_options.sigma_pix, 2);
       aruco_options.sigma_pix_sq = std::pow(aruco_options.sigma_pix, 2);
       parser->parse_config("zupt_chi2_multipler", zupt_options.chi2_multipler);
-
-      // Triangulation-aware CBF: which feature set the observability metric is computed from.
-      // Default true => persistent SLAM features (matches the TANGO-VIO paper derivation).
-      bool cbf_use_slam_features = true;
-      parser->parse_config("cbf_use_slam_features", cbf_use_slam_features, false);
-      msckf_options.cbf_use_slam_features = cbf_use_slam_features;
-      slam_options.cbf_use_slam_features = cbf_use_slam_features;
     }
     PRINT_DEBUG("  Updater MSCKF Feats:\n");
     msckf_options.print();

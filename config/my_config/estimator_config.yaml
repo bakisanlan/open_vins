@@ -21,12 +21,6 @@ max_slam_in_update: 25 # update can be split into sequential updates of batches,
 max_msckf_in_update: 40 # how many MSCKF features to use in the update
 dt_slam_delay: 1 # delay before initializing (helps with stability from bad initialization...)
 
-# Triangulation-aware CBF (TANGO-VIO): which feature set the observability metric (log-det of
-# the per-feature triangulation information matrices) is computed from.
-#   true  = persistent SLAM features (matches the paper; re-observed across the full window)
-#   false = short-track MSCKF features
-cbf_use_slam_features: true
-
 gravity_mag: 9.806549995508071 # magnitude of gravity in this location
 
 feat_rep_msckf: "ANCHORED_MSCKF_INVERSE_DEPTH"

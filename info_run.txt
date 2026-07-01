@@ -7,7 +7,7 @@ rviz2 -d ~/ros2_ws/src/open_vins/ov_msckf/launch/display_ros2.rviz
 
 ros2 run ov_msckf cbf_safety_filter_node.py --ros-args -r __ns:=/ov_msckf --params-file $(ros2 pkg prefix ov_msckf --share)/config/cbf_config.yaml
 ros2 topic pub /ov_msckf/cmd_vel_nom geometry_msgs/msg/TwistStamped   "{header: {frame_id: 'base_link'}, twist: {linear: {x: 3.0, y: 0.0, z: 1.0}}}" -r 10
-python keyboard_joy_node.py 
+python keyboard_joy_node.py ros2 run ov_msckf bspline_traj_node.py --ros-args     -r __ns:=/ap     --params-file $(ros2 pkg prefix ov_msckf --share)/config/bspline_traj_config.yaml
 
 ~/ros2_ws/src/open_vins/ov_msckf/scripts$ python plot_cbf_log.py 
 

@@ -1,0 +1,942 @@
+%% =========================================================================
+%%  cbf_logdet_triangulation_multi_feature_revised.tex
+%%  Control Barrier Function for Multi-Feature Triangulation Observability
+%%  using an Average Log-Determinant Safe Set
+%% =========================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+%% ---------- Packages ----------
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{mdframed}
+\usepackage{thmtools}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{cancel}
+
+%% ---------- Theorem environments ----------
+\declaretheoremstyle[
+  spaceabove=6pt, spacebelow=6pt,
+  headfont=\normalfont\bfseries,
+  notefont=\normalfont\bfseries, notebraces={(}{)},
+  bodyfont=\normalfont,
+  postheadspace=5pt
+]{mystyle}
+
+\declaretheorem[style=mystyle,name=Theorem,numberwithin=section]{theorem}
+\declaretheorem[style=mystyle,name=Lemma,numberwithin=section]{lemma}
+\declaretheorem[style=mystyle,name=Proposition,numberwithin=section]{proposition}
+\declaretheorem[style=mystyle,name=Definition,numberwithin=section]{definition}
+\declaretheorem[style=mystyle,name=Remark,numberwithin=section,shaded={bgcolor=gray!10}]{remark}
+
+%% ---------- Coloured result boxes ----------
+\newmdenv[
+  backgroundcolor=blue!6,
+  linecolor=blue!40,
+  linewidth=1pt,
+  roundcorner=4pt,
+  skipabove=8pt,
+  skipbelow=8pt
+]{resultbox}
+
+\newmdenv[
+  backgroundcolor=orange!8,
+  linecolor=orange!60,
+  linewidth=1pt,
+  roundcorner=4pt,
+  skipabove=8pt,
+  skipbelow=8pt
+]{keyresult}
+
+%% ---------- Macros ----------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\SO}{\mathrm{SO}(3)}
+\newcommand{\Stwo}{\mathcal{S}^{2}}
+\newcommand{\bzero}{\bm{0}}
+\newcommand{\bv}{\bm{v}}
+\newcommand{\bo}{\bm{\omega}}
+\newcommand{\bu}{\bm{u}}
+\newcommand{\bb}{\bm{b}}
+\newcommand{\bp}{\bm{p}}
+\newcommand{\bR}{\bm{R}}
+\newcommand{\bI}{\bm{I}}
+\newcommand{\bM}{\bm{M}}
+\newcommand{\bPsi}{\bm{\Psi}}
+\newcommand{\sx}[1]{[#1]_{\times}}
+\newcommand{\logdet}{\log\det}
+\newcommand{\Tr}{\operatorname{tr}}
+\newcommand{\bij}{\bm{b}_{i,j}}
+\newcommand{\bhij}{\hat{\bm{b}}_{i,j}}
+\newcommand{\pij}{\bm{\pi}_{i,j}}
+\newcommand{\Mii}{\bm{M}_{i}}
+\newcommand{\ellii}{\ell_i}
+
+%% ---------- Hyperref ----------
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=green!50!black,
+  urlcolor=blue!80!black
+}
+
+%% =========================================================================
+\begin{document}
+
+\title{\textbf{Control Barrier Function for Multi-Feature Triangulation Observability}\\[4pt]
+       \large An Average Log-Determinant Safe-Set Formulation}
+\author{}
+\date{\today}
+\maketitle
+\tableofcontents
+\bigskip
+
+% =========================================================================
+\section{Introduction and Problem Motivation}
+% =========================================================================
+
+In vision-aided navigation and visual-inertial odometry (VIO), the quality of
+triangulated 3D feature positions is a fundamental prerequisite for
+state-estimation accuracy.  Triangulation becomes \emph{ill-conditioned}---or
+even \emph{impossible}---when a camera undergoes pure rotation without
+translation, or when the observed bearing vectors provide insufficient
+parallax.  These scenarios cause the triangulation information matrix to
+become rank deficient or poorly conditioned.
+
+This document considers a finite trajectory window containing $n$ camera poses
+and $s$ visible or selected point features.  The index
+$i\in\{1,\ldots,s\}$ denotes the feature index, while
+$j\in\{1,\ldots,n\}$ denotes the camera pose inside the trajectory window.
+Thus, the bearing associated with feature $i$ observed from pose $j$ is denoted
+by $\bm{b}_{i,j}$.
+
+\begin{definition}[Per-feature triangulation observability]
+For feature $i$, the set of bearing measurements
+$\{\bm{b}_{i,j}\}_{j=1}^{n}$ admits a unique least-squares triangulation if
+and only if the corresponding information matrix
+\begin{equation}
+  \bm{M}_{i}
+  = \sum_{j=1}^{n}\left(\eta_{i,j}^{2}\bm{I}
+  - \bm{b}_{i,j}\bm{b}_{i,j}^{\top}\right)
+  \label{eq:intro_Mi}
+\end{equation}
+is positive definite, where $\eta_{i,j}=\|\bm{b}_{i,j}\|_2$.  If the bearings
+are unit-normalized, then $\eta_{i,j}=1$ and
+$\bm{M}_{i}=\sum_{j=1}^{n}(\bm{I}-\bm{b}_{i,j}\bm{b}_{i,j}^{\top})$.
+\end{definition}
+
+The goal is to derive a \textbf{Control Barrier Function (CBF)} that modifies
+the nominal camera translational velocity command so that the average
+triangulation quality over all selected features remains above a prescribed
+threshold.  Each feature has its own log-determinant observability metric,
+\begin{equation}
+  \ell_i = \log\det\bm{M}_i,
+\end{equation}
+and the CBF reads the average value
+\begin{equation}
+  \bar{\ell}
+  = \frac{1}{s}\sum_{i=1}^{s}\ell_i
+  = \frac{1}{s}\sum_{i=1}^{s}\log\det\bm{M}_i.
+  \label{eq:average_logdet_intro}
+\end{equation}
+The safety objective is therefore $\bar{\ell}\ge h_{\min}$, where $h_{\min}$
+is a user-selected observability threshold.
+
+% =========================================================================
+\section{Notation and Conventions}
+% =========================================================================
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{clc}
+\toprule
+\textbf{Symbol} & \textbf{Description} & \textbf{Space} \\
+\midrule
+$i\in\{1,\ldots,s\}$ & Feature index & $\mathbb{N}$ \\
+$j\in\{1,\ldots,n\}$ & Camera-pose index in the trajectory window & $\mathbb{N}$ \\
+${}^{A}\bm{p}_{f_i}$ & Position of feature $i$ in anchor frame $A$ & $\R^3$ \\
+${}^{A}\bm{p}_{C_j}$ & Position of camera pose $C_j$ in anchor frame $A$ & $\R^3$ \\
+$\bm{R}_{C_j}^{A}$ & Rotation matrix from camera frame $C_j$ to anchor frame $A$ & $\SO$ \\
+$\bm{R}_{B}^{C}$ & Rotation matrix from body frame $B$ to camera frame $C$ & $\SO$ \\
+$\bm{v}_{B,j}$ & Body-frame velocity at pose $j$ & $\R^3$ \\
+$\bm{v}_{B}$ & Current velocity command $\bm{v}_{B,n}$ (control input) & $\R^3$ \\
+$f(\bm{x})$ & Drift term (past-pose contribution to $\dot{h}$) & $\R$ \\
+$\bm{g}(\bm{x})$ & Control-input gradient vector in body frame & $\R^3$ \\
+$\bm{b}_{i,j}$ & Bearing of feature $i$ from pose $j$, expressed in anchor frame & $\R^3$ \\
+$\hat{\bm{b}}_{i,j}$ & Unit bearing $\bm{b}_{i,j}/\eta_{i,j}$ & $\mathcal{S}^2$ \\
+$\rho_{i,j}$ & Depth/range of feature $i$ from pose $j$ & $\R_{>0}$ \\
+$\bm{\pi}_{i,j}$ & Projection/information contribution of bearing $\bm{b}_{i,j}$ & $\R^{3\times3}$ \\
+$\bm{M}_{i}$ & Triangulation information matrix for feature $i$ & $\R^{3\times3}$ \\
+$\ell_i$ & Feature-wise log-det metric $\log\det\bm{M}_i$ & $\R$ \\
+$\bar{\ell}$ & Average log-det metric over all selected features & $\R$ \\
+\bottomrule
+\end{tabular}
+\caption{Summary of the multi-feature notation.}
+\label{tab:notation}
+\end{table}
+
+The notation ${}^{A}\bm{p}_{C_j}$ is used throughout the document instead of
+${}^{A}\bm{p}_{C}$ because $j$ explicitly denotes the camera pose inside the
+trajectory window.  Similarly, any pose-dependent rotation from the camera
+frame to the anchor frame is written as $\bm{R}_{C_j}^{A}$.
+
+% =========================================================================
+\section{System Model and Feature Geometry}
+% =========================================================================
+
+For feature $i$ observed from camera pose $j$, the position of the feature in
+camera frame $C_j$ is
+\begin{equation}
+  {}^{C_j}\bm{p}_{f_i}
+  = \bm{R}_{A}^{C_j}\left({}^{A}\bm{p}_{f_i}
+  - {}^{A}\bm{p}_{C_j}\right)
+  \in\R^3 .
+  \label{eq:feature_camera_frame}
+\end{equation}
+Equivalently, after rotating this vector back to the anchor frame,
+\begin{equation}
+  {}^{C_j\to A}\bm{p}_{f_i}
+  = \bm{R}_{C_j}^{A}\,{}^{C_j}\bm{p}_{f_i}
+  = {}^{A}\bm{p}_{f_i}-{}^{A}\bm{p}_{C_j}
+  = \rho_{i,j}\,\bm{b}_{i,j}.
+  \label{eq:feature_anchor_factored}
+\end{equation}
+Hereafter, $\bm{b}_{i,j}$ denotes the bearing of feature $i$ observed from pose
+$j$ and expressed in the anchor frame.  If the raw bearing is not unit length,
+then
+\begin{equation}
+  \bm{b}_{i,j}=\eta_{i,j}\hat{\bm{b}}_{i,j},
+  \qquad
+  \eta_{i,j}=\|\bm{b}_{i,j}\|_2,
+  \qquad
+  \|\hat{\bm{b}}_{i,j}\|_2=1 .
+\end{equation}
+
+The pose-dependent translational kinematics are written as
+\begin{equation}
+  {}^{A}\dot{\bm{p}}_{C_j}
+  = \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+  \label{eq:pose_velocity}
+\end{equation}
+Here $\bm{v}_{B,j}$ denotes the body-frame velocity at pose $j$.
+
+\begin{remark}[Past vs.\ current velocity]
+In a sliding-window estimator the trajectory window contains $n-1$ past
+(already-recorded) poses and one current (active) pose $j=n$.  For past poses
+$j<n$, $\bm{v}_{B,j}$ is a known, recorded quantity.  Only the current-pose
+velocity $\bm{v}_{B,n}\equiv\bm{v}_{B}$ is the control input that the CBF can
+design.  This distinction is critical for the barrier dynamics derived in
+\Cref{sec:hdot}.
+\end{remark}
+
+% =========================================================================
+\section{Bearing Vector Dynamics}
+% =========================================================================
+
+Differentiating \eqref{eq:feature_anchor_factored} with respect to time gives
+\begin{align}
+  {}^{C_j\to A}\dot{\bm{p}}_{f_i}
+  &= {}^{A}\dot{\bm{p}}_{f_i}-{}^{A}\dot{\bm{p}}_{C_j} \\
+  &= \dot{\rho}_{i,j}\bm{b}_{i,j}
+     + \rho_{i,j}\dot{\bm{b}}_{i,j}. 
+  \label{eq:relative_position_derivative}
+\end{align}
+The point feature is assumed to be static in the anchor frame, i.e.,
+${}^{A}\dot{\bm{p}}_{f_i}=\bm{0}$.  Therefore,
+\begin{equation}
+  -{}^{A}\dot{\bm{p}}_{C_j}
+  = \dot{\rho}_{i,j}\bm{b}_{i,j}
+    + \rho_{i,j}\dot{\bm{b}}_{i,j}.
+  \label{eq:relative_derivative_static_feature}
+\end{equation}
+
+\subsection{Depth Rate}
+
+Using $\bm{b}_{i,j}=\eta_{i,j}\hat{\bm{b}}_{i,j}$ and multiplying
+\eqref{eq:relative_derivative_static_feature} by
+$\hat{\bm{b}}_{i,j}^{\top}/\eta_{i,j}$ gives
+\begin{equation}
+  \dot{\rho}_{i,j}
+  = -\frac{\hat{\bm{b}}_{i,j}^{\top}}{\eta_{i,j}}
+  {}^{A}\dot{\bm{p}}_{C_j}.
+\end{equation}
+Substituting \eqref{eq:pose_velocity} yields
+\begin{resultbox}
+\begin{equation}
+  \boxed{
+  \dot{\rho}_{i,j}
+  = -\frac{\hat{\bm{b}}_{i,j}^{\top}}{\eta_{i,j}}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}}
+  \label{eq:rhodot_multi_feature}
+\end{equation}
+\end{resultbox}
+
+\subsection{Bearing Rate}
+
+Substituting the depth rate back into
+\eqref{eq:relative_derivative_static_feature} gives
+\begin{align}
+  \dot{\bm{b}}_{i,j}
+  &= \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+     \bm{b}_{i,j}\bm{b}_{i,j}^{\top}
+     \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}
+     -\frac{1}{\rho_{i,j}}\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j} \\
+  &= -\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+     \left(\eta_{i,j}^{2}\bm{I}
+     -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}\right)
+     \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+\end{align}
+Define
+\begin{equation}
+  \bm{\pi}_{i,j}
+  = \eta_{i,j}^{2}\bm{I}
+    -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}.
+  \label{eq:pij_def}
+\end{equation}
+Then the bearing dynamics become
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  \dot{\bm{b}}_{i,j}
+  = -\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{\pi}_{i,j}\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}}
+  \label{eq:bdot_multi_feature}
+\end{equation}
+\end{keyresult}
+
+\begin{remark}
+Because $\bm{b}_{i,j}$ is expressed in the anchor frame, the derived log-det
+barrier depends directly on translational motion.  The pose dependence is
+retained through $\bm{R}_{C_j}^{A}$ and ${}^{A}\bm{p}_{C_j}$.
+\end{remark}
+
+% =========================================================================
+\section{Triangulation Information Matrix}
+% =========================================================================
+
+\subsection{Per-feature normal equations}
+
+For feature $i$, the cross-product constraint at pose $j$ is
+\begin{equation}
+  \sx{\bm{b}_{i,j}}
+  \left({}^{A}\bm{p}_{f_i}-{}^{A}\bm{p}_{C_j}\right)=\bm{0}.
+\end{equation}
+Stacking all $n$ constraints over the camera poses in the trajectory window
+gives
+\begin{equation}
+  \underbrace{
+  \begin{bmatrix}
+  \bm{N}_{i,1}\\
+  \vdots\\
+  \bm{N}_{i,n}
+  \end{bmatrix}}_{\bm{A}_i\in\R^{3n\times3}}
+  {}^{A}\bm{p}_{f_i}
+  =
+  \underbrace{
+  \begin{bmatrix}
+  \bm{N}_{i,1}{}^{A}\bm{p}_{C_1}\\
+  \vdots\\
+  \bm{N}_{i,n}{}^{A}\bm{p}_{C_n}
+  \end{bmatrix}}_{\bm{q}_i\in\R^{3n}},
+  \qquad
+  \bm{N}_{i,j}=\sx{\bm{b}_{i,j}}.
+\end{equation}
+The least-squares solution satisfies
+$\bm{A}_{i}^{\top}\bm{A}_{i}{}^{A}\bm{p}_{f_i}
+=\bm{A}_{i}^{\top}\bm{q}_{i}$.  Using
+\begin{equation}
+  \bm{N}_{i,j}^{\top}\bm{N}_{i,j}
+  = \sx{\bm{b}_{i,j}}^{\top}\sx{\bm{b}_{i,j}}
+  = \eta_{i,j}^{2}\bm{I}
+    -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}
+  = \bm{\pi}_{i,j},
+\end{equation}
+the per-feature triangulation information matrix is
+\begin{resultbox}
+\begin{equation}
+  \boxed{
+  \bm{M}_{i}
+  = \bm{A}_{i}^{\top}\bm{A}_{i}
+  = \sum_{j=1}^{n}\bm{\pi}_{i,j}
+  = \sum_{j=1}^{n}\left(\eta_{i,j}^{2}\bm{I}
+  -\bm{b}_{i,j}\bm{b}_{i,j}^{\top}\right)
+  \in\R^{3\times3}.}
+  \label{eq:Mi_def}
+\end{equation}
+\end{resultbox}
+
+\begin{remark}
+$\bm{M}_{i}$ is positive semidefinite by construction.  It is positive
+definite if the bearing set $\{\bm{b}_{i,j}\}_{j=1}^{n}$ provides sufficient
+parallax for feature $i$.  Therefore, each feature has its own observability
+metric and its own rank-deficiency risk.
+\end{remark}
+
+% =========================================================================
+\section{Average Log-Determinant Barrier Function}
+% =========================================================================
+
+\subsection{Feature-wise and averaged observability metrics}
+
+The feature-wise log-det metric is defined as
+\begin{equation}
+  \ell_i = \log\det\bm{M}_{i},
+  \qquad i=1,\ldots,s.
+  \label{eq:ell_i_def}
+\end{equation}
+The CBF does not read a single-feature metric.  Instead, it reads the average
+log-det value over all selected features:
+\begin{resultbox}
+\begin{equation}
+  \boxed{
+  \bar{\ell}
+  = \frac{1}{s}\sum_{i=1}^{s}\ell_i
+  = \frac{1}{s}\sum_{i=1}^{s}\log\det\bm{M}_{i}.}
+  \label{eq:average_logdet}
+\end{equation}
+\end{resultbox}
+This average is the logarithm of the geometric mean of the determinants:
+\begin{equation}
+  \bar{\ell}
+  = \log\left(\prod_{i=1}^{s}\det\bm{M}_{i}\right)^{1/s}.
+\end{equation}
+
+\subsection{Barrier function and safe set}
+
+Let $h_{\min}\in\R$ denote the prescribed minimum acceptable average log-det
+value.  Define
+\begin{definition}[Average log-det barrier]
+\begin{equation}
+  h(\bm{x})
+  = \bar{\ell}(\bm{x}) - h_{\min}
+  = \frac{1}{s}\sum_{i=1}^{s}\log\det\bm{M}_{i}(\bm{x}) - h_{\min}.
+  \label{eq:h_average_def}
+\end{equation}
+The safe set is
+\begin{equation}
+  \mathcal{C}
+  = \left\{\bm{x}: h(\bm{x})\ge0\right\}
+  = \left\{\bm{x}: \frac{1}{s}\sum_{i=1}^{s}\log\det\bm{M}_{i}(\bm{x})
+  \ge h_{\min}\right\}.
+  \label{eq:safe_set_average}
+\end{equation}
+\end{definition}
+
+\begin{remark}
+The average log-det condition enforces an aggregate observability requirement.
+It does not, by itself, guarantee that every individual feature satisfies
+$\log\det\bm{M}_{i}\ge h_{\min}$.  If feature-wise guarantees are required,
+one should impose either $s$ individual CBF constraints or use
+$\min_i\ell_i$-type logic.  In the present formulation, the requested CBF
+constraint is based on the average metric $\bar{\ell}$.
+\end{remark}
+
+% =========================================================================
+\section{Time Derivative of the Average Barrier Function}
+\label{sec:hdot}
+% =========================================================================
+
+\subsection{Rate of change of each information matrix}
+
+From \eqref{eq:Mi_def},
+\begin{align}
+  \dot{\bm{M}}_{i}
+  &= \sum_{j=1}^{n}\dot{\bm{\pi}}_{i,j} \\
+  &= -\sum_{j=1}^{n}
+  \left(\dot{\bm{b}}_{i,j}\bm{b}_{i,j}^{\top}
+  + \bm{b}_{i,j}\dot{\bm{b}}_{i,j}^{\top}\right),
+  \label{eq:Midot}
+\end{align}
+where $\eta_{i,j}$ is assumed constant for normalized bearing measurements.
+For unit-normalized bearings, $\eta_{i,j}=1$.
+
+\subsection{Derivative of each feature-wise log-det metric}
+
+For each positive-definite $\bm{M}_{i}$,
+\begin{equation}
+  \dot{\ell}_{i}
+  = \frac{d}{dt}\log\det\bm{M}_{i}
+  = \Tr\left(\bm{M}_{i}^{-1}\dot{\bm{M}}_{i}\right).
+\end{equation}
+Substituting \eqref{eq:Midot}, using cyclic trace identities, and exploiting
+symmetry of $\bm{M}_{i}^{-1}$ gives
+\begin{resultbox}
+\begin{equation}
+  \boxed{
+  \dot{\ell}_{i}
+  = -2\sum_{j=1}^{n}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\dot{\bm{b}}_{i,j}.}
+  \label{eq:ellidot_compact}
+\end{equation}
+\end{resultbox}
+
+\subsection{Derivative of the average log-det barrier:
+drift--control decomposition}
+
+Since
+$h=\frac{1}{s}\sum_{i=1}^{s}\ell_i-h_{\min}$, the barrier derivative is
+\begin{equation}
+  \dot{h}
+  = \frac{1}{s}\sum_{i=1}^{s}\dot{\ell}_{i}.
+\end{equation}
+Substituting \eqref{eq:bdot_multi_feature} into
+\eqref{eq:ellidot_compact} and noting that each pose carries its own velocity
+$\bm{v}_{B,j}$ yields
+\begin{align}
+  \dot{h}
+  &= \frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}.
+  \label{eq:hdot_average_expanded}
+\end{align}
+Because only the current-pose velocity $\bm{v}_{B,n}\equiv\bm{v}_{B}$ is the
+control input while all past-pose velocities $\bm{v}_{B,j}$, $j<n$, are known
+recorded quantities, the double sum splits naturally into a \emph{drift} term
+and a \emph{control} term.  Using the symmetry identity
+$\bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+=\bigl(\bm{\pi}_{i,j}\bm{M}_{i}^{-1}\bm{b}_{i,j}\bigr)^{\top}$
+to factor out the current-pose velocity:
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  \dot{h}
+  = \underbrace{f(\bm{x})}_{\text{drift (past poses)}}
+  + \underbrace{\bm{g}(\bm{x})^{\top}\bm{v}_{B}}_{\text{control (current pose)}}}
+  \label{eq:hdot_drift_control}
+\end{equation}
+\end{keyresult}
+where
+\begin{align}
+  f(\bm{x})
+  &= \frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n-1}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j},
+  \label{eq:drift_def}\\[6pt]
+  \bm{g}(\bm{x})
+  &= \frac{2}{s}\sum_{i=1}^{s}
+  \frac{1}{\rho_{i,n}\eta_{i,n}^{2}}
+  \left(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\right)^{\top}
+  \bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}
+  \;\in\R^3.
+  \label{eq:g_def}
+\end{align}
+
+\begin{remark}[Physical interpretation of the decomposition]
+The drift $f(\bm{x})$ captures how \emph{past} translational motion has already
+contributed to (or degraded) the observability metric.  It is fully determined
+by the recorded trajectory and bearing history.  The control-input gradient
+$\bm{g}(\bm{x})$ captures only the \emph{current} pose's influence, which is
+the only quantity the controller can modify at the present time step.
+\end{remark}
+
+% =========================================================================
+\section{Drift and Control-Input Gradient}
+% =========================================================================
+
+From the decomposition in \eqref{eq:hdot_drift_control}, the barrier
+derivative has the control-affine structure
+$\dot{h}=f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}$ with drift and
+control-input gradient defined in \eqref{eq:drift_def}--\eqref{eq:g_def}.
+
+\subsection{Drift term (past poses)}
+
+The scalar drift collects the \emph{known} contributions of all past-pose
+recorded velocities:
+\begin{resultbox}
+\begin{equation}
+  \boxed{
+  f(\bm{x})
+  = \frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n-1}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}
+  \;\in\R.}
+  \label{eq:drift_boxed}
+\end{equation}
+\end{resultbox}
+All quantities in $f(\bm{x})$ are evaluated from the recorded trajectory
+window and are therefore computable at each time step without any design
+freedom.
+
+\subsection{Control-input gradient (current pose)}
+
+The body-frame gradient that multiplies the designable velocity is
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  \bm{g}(\bm{x})
+  = \frac{2}{s}\sum_{i=1}^{s}
+  \frac{1}{\rho_{i,n}\eta_{i,n}^{2}}
+  \left(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\right)^{\top}
+  \bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}
+  \;\in\R^3.}
+  \label{eq:g_boxed}
+\end{equation}
+\end{keyresult}
+The barrier derivative is therefore
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  \dot{h}(\bm{x})=f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}.}
+  \label{eq:hdot_linear_average}
+\end{equation}
+\end{keyresult}
+
+\begin{theorem}[Relative degree one]
+The average log-det barrier in \eqref{eq:h_average_def} has relative degree
+one with respect to the linear velocity input $\bm{v}_{B}$, since its first
+time derivative depends affinely on $\bm{v}_{B}$.
+\end{theorem}
+
+\begin{remark}[Geometric interpretation]
+In $\bm{g}(\bm{x})$, the term $\bm{M}_{i}^{-1}\bm{b}_{i,n}$ amplifies poorly
+covered directions for feature $i$ at the current pose,
+$\bm{\pi}_{i,n}$ removes the unobservable radial component along the bearing,
+$1/\rho_{i,n}$ weights closer features more strongly, and
+$(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C})^{\top}$ maps the anchor-frame gradient into
+the body-frame velocity coordinates.  The drift $f(\bm{x})$ summarises how
+past motion has already shaped the information matrix.
+\end{remark}
+
+% =========================================================================
+\section{Control Barrier Function Condition}
+\label{sec:cbf}
+% =========================================================================
+
+\begin{definition}[Control Barrier Function]
+A continuously differentiable function $h$ is a Control Barrier Function for
+the safe set $\mathcal{C}=\{\bm{x}:h(\bm{x})\ge0\}$ if there exists a
+class-$\mathcal{K}$ function $\alpha$ such that
+\begin{equation}
+  \sup_{\bm{v}_{B}\in\mathcal{V}}
+  \left[\dot{h}(\bm{x},\bm{v}_{B})+\alpha(h(\bm{x}))\right]\ge0.
+\end{equation}
+\end{definition}
+
+Using the linear class-$\mathcal{K}$ function $\alpha(h)=\gamma h$, with
+$\gamma>0$, and substituting $\dot{h}=f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}$
+from \eqref{eq:hdot_linear_average}, the average log-det CBF condition becomes
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma\left(
+  \frac{1}{s}\sum_{i=1}^{s}\log\det\bm{M}_{i}(\bm{x})-h_{\min}
+  \right)
+  \ge0.}
+  \label{eq:cbf_condition_average}
+\end{equation}
+\end{keyresult}
+Equivalently, it enforces
+\begin{equation}
+  f(\bm{x}) + \bm{g}(\bm{x})^{\top}\bm{v}_{B} + \gamma h \ge 0,
+  \label{eq:cbf_condition_expanded}
+\end{equation}
+which explicitly separates the drift from past poses and the control input from
+the current pose.
+
+% =========================================================================
+\section{CBF-QP Formulation}
+% =========================================================================
+
+At each time instant, the nominal VIO/trajectory-tracking velocity command
+$\bm{v}_{B,\mathrm{nom}}$ is minimally modified to satisfy the average
+observability constraint:
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  \begin{aligned}
+  \bm{v}_{B}^{*}
+  ={}&\arg\min_{\bm{v}_{B}\in\R^{3}}
+  &&\frac{1}{2}\|\bm{v}_{B}-\bm{v}_{B,\mathrm{nom}}\|_{\bm{W}}^{2}\\
+  &\text{subject to}
+  && f(\bm{x}) + \bm{g}(\bm{x})^{\top}\bm{v}_{B} + \gamma h \ge 0,
+  \qquad [\text{average log-det CBF}]\\
+  &&&\bm{v}_{B,\min}\le\bm{v}_{B}\le\bm{v}_{B,\max},
+  \qquad [\text{velocity limits}]
+  \end{aligned}}
+  \label{eq:cbf_qp_average}
+\end{equation}
+\end{keyresult}
+where $\bm{W}\succ0$ is a weighting matrix and
+$\|\bm{a}\|_{\bm{W}}^{2}=\bm{a}^{\top}\bm{W}\bm{a}$.
+
+\begin{theorem}[Forward invariance]
+If the QP in \eqref{eq:cbf_qp_average} is feasible and solved at each time,
+then the average safe set $\mathcal{C}$ in \eqref{eq:safe_set_average} is
+forward invariant.  In particular,
+\begin{equation}
+  h(0)\ge0\quad\Longrightarrow\quad h(t)\ge0,
+  \qquad \forall t\ge0.
+\end{equation}
+\begin{proof}[Proof sketch]
+The CBF condition enforces $\dot{h}\ge-\gamma h$.  By the comparison lemma,
+$h(t)\ge h(0)e^{-\gamma t}\ge0$ whenever $h(0)\ge0$.
+\end{proof}
+\end{theorem}
+
+% =========================================================================
+\section{Analytical Solution for a Single CBF Constraint}
+% =========================================================================
+
+When velocity box constraints are inactive and $\bm{W}=\bm{I}$, the QP admits
+a closed-form solution.  If
+$f(\bm{x})+\bm{g}^{\top}\bm{v}_{B,\mathrm{nom}}+\gamma h\ge0$, the nominal
+command is already safe.  Otherwise, the active constraint projection gives
+\begin{keyresult}
+\begin{equation}
+  \boxed{
+  \bm{v}_{B}^{*}
+  =
+  \begin{cases}
+  \bm{v}_{B,\mathrm{nom}},
+  & f(\bm{x}) + \bm{g}^{\top}\bm{v}_{B,\mathrm{nom}} + \gamma h
+  \ge 0,\\[6pt]
+  \bm{v}_{B,\mathrm{nom}}
+  -\dfrac{f(\bm{x}) + \bm{g}^{\top}\bm{v}_{B,\mathrm{nom}} + \gamma h}
+  {\|\bm{g}\|_{2}^{2}}\bm{g},
+  & f(\bm{x}) + \bm{g}^{\top}\bm{v}_{B,\mathrm{nom}} + \gamma h
+  < 0.
+  \end{cases}}
+  \label{eq:closed_form_average}
+\end{equation}
+\end{keyresult}
+The correction is the minimum-norm projection of the nominal command onto the
+feasible half-space defined by the average log-det CBF constraint.
+
+% =========================================================================
+\section{Handling Unknown Depths}
+% =========================================================================
+
+The control-input gradient $\bm{g}$ in \eqref{eq:g_boxed} and the drift
+$f(\bm{x})$ in \eqref{eq:drift_boxed} both depend on
+$\rho_{i,j}$.  Two practical strategies are available:
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{lll}
+\toprule
+\textbf{Strategy} & \textbf{Substitution} & \textbf{Trade-off} \\
+\midrule
+Online estimate
+& $1/\rho_{i,j}\leftarrow1/\hat{\rho}_{i,j}$
+& More accurate; requires depth initialization \\
+Robust lower-bound model
+& $1/\rho_{i,j}\leftarrow1/\rho_{\min}$
+& Conservative; avoids explicit depth estimation \\
+\bottomrule
+\end{tabular}
+\caption{Strategies for handling unknown feature depths.}
+\label{tab:depth_multi}
+\end{table}
+
+% =========================================================================
+\section{Complete Real-Time Algorithm}
+% =========================================================================
+
+\begin{algorithm}[H]
+\caption{CBF-QP Safety Filter Using the Average Multi-Feature Log-Det Metric}
+\label{alg:cbf_average}
+\begin{algorithmic}[1]
+\Require Bearings $\{\bm{b}_{i,j}\}_{i=1,j=1}^{s,n}$, depths or estimates
+$\{\hat{\rho}_{i,j}\}_{i=1,j=1}^{s,n}$, rotations
+$\{\bm{R}_{C_j}^{A}\}_{j=1}^{n}$, recorded past velocities
+$\{\bm{v}_{B,j}\}_{j=1}^{n-1}$, nominal velocity
+$\bm{v}_{B,\mathrm{nom}}$, parameters $h_{\min}$ and $\gamma$
+\Ensure Safe linear velocity $\bm{v}_{B}^{*}$
+\For{$i=1,\ldots,s$}
+  \State $\bm{M}_{i}\leftarrow\sum_{j=1}^{n}\bm{\pi}_{i,j}$
+  \Comment{Per-feature information matrix}
+  \State $\ell_i\leftarrow\log\det\bm{M}_{i}$
+  \Comment{Feature-wise log-det metric}
+\EndFor
+\State $\bar{\ell}\leftarrow\frac{1}{s}\sum_{i=1}^{s}\ell_i$
+\Comment{Average observability metric}
+\State $h\leftarrow\bar{\ell}-h_{\min}$
+\State \textbf{--- Drift from past poses ---}
+\State $f\leftarrow
+\frac{2}{s}\sum_{i=1}^{s}\sum_{j=1}^{n-1}
+\frac{1}{\hat{\rho}_{i,j}\eta_{i,j}^{2}}
+\bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}$
+\State \textbf{--- Control gradient from current pose ---}
+\State $\bm{g}\leftarrow
+\frac{2}{s}\sum_{i=1}^{s}
+\frac{1}{\hat{\rho}_{i,n}\eta_{i,n}^{2}}
+(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C})^{\top}
+\bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}$
+\State $c_{\mathrm{safe}}\leftarrow-\gamma h - f$
+\If{$\bm{g}^{\top}\bm{v}_{B,\mathrm{nom}}\ge c_{\mathrm{safe}}$}
+  \State $\bm{v}_{B}^{*}\leftarrow\bm{v}_{B,\mathrm{nom}}$
+\Else
+  \State $\lambda^{*}\leftarrow
+  \dfrac{c_{\mathrm{safe}}-\bm{g}^{\top}\bm{v}_{B,\mathrm{nom}}}
+  {\|\bm{g}\|_{2}^{2}}$
+  \State $\bm{v}_{B}^{*}\leftarrow\bm{v}_{B,\mathrm{nom}}+\lambda^{*}\bm{g}$
+\EndIf
+\State \Return $\bm{v}_{B}^{*}$
+\end{algorithmic}
+\end{algorithm}
+
+% =========================================================================
+\section{Summary of Key Equations}
+% =========================================================================
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{lll}
+\toprule
+\textbf{Quantity} & \textbf{Expression} & \textbf{Reference} \\
+\midrule
+Bearing of feature $i$ from pose $j$
+& ${}^{C_j\to A}\bm{p}_{f_i}=\rho_{i,j}\bm{b}_{i,j}$
+& \eqref{eq:feature_anchor_factored} \\
+Pose velocity
+& ${}^{A}\dot{\bm{p}}_{C_j}=\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}$
+& \eqref{eq:pose_velocity} \\
+Bearing dynamics
+& $\dot{\bm{b}}_{i,j}=-\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}\bm{\pi}_{i,j}\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}$
+& \eqref{eq:bdot_multi_feature} \\
+Projection matrix
+& $\bm{\pi}_{i,j}=\eta_{i,j}^{2}\bm{I}-\bm{b}_{i,j}\bm{b}_{i,j}^{\top}$
+& \eqref{eq:pij_def} \\
+Per-feature information matrix
+& $\bm{M}_{i}=\sum_{j=1}^{n}\bm{\pi}_{i,j}$
+& \eqref{eq:Mi_def} \\
+Barrier function
+& $h=\bar{\ell}-h_{\min}$
+& \eqref{eq:h_average_def} \\
+Drift (past poses)
+& $f(\bm{x})=\frac{2}{s}\sum_{i}\sum_{j=1}^{n-1}\frac{1}{\rho_{i,j}\eta_{i,j}^{2}}\bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}\bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j}$
+& \eqref{eq:drift_def} \\
+Control gradient (current pose)
+& $\bm{g}(\bm{x})=\frac{2}{s}\sum_{i}\frac{1}{\rho_{i,n}\eta_{i,n}^{2}}(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C})^{\top}\bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}$
+& \eqref{eq:g_def} \\
+Lie derivative
+& $\dot{h}=f(\bm{x})+\bm{g}(\bm{x})^{\top}\bm{v}_{B}$
+& \eqref{eq:hdot_linear_average} \\
+CBF condition
+& $f(\bm{x})+\bm{g}^{\top}\bm{v}_{B}+\gamma(\bar{\ell}-h_{\min})\ge0$
+& \eqref{eq:cbf_condition_average} \\
+\bottomrule
+\end{tabular}
+\caption{Summary of the drift--control multi-feature average log-det CBF derivation.}
+\label{tab:summary_multi}
+\end{table}
+
+% =========================================================================
+\section{Discussion}
+% =========================================================================
+
+\subsection{Meaning of the average log-det threshold}
+
+The condition
+\begin{equation}
+  \bar{\ell}\ge h_{\min}
+\end{equation}
+means that the average feature-wise triangulation quality over the selected
+feature set is kept above the desired level.  Equivalently, it enforces a lower
+bound on the geometric mean of the determinants:
+\begin{equation}
+  \left(\prod_{i=1}^{s}\det\bm{M}_{i}\right)^{1/s}
+  \ge \exp(h_{\min}).
+\end{equation}
+Thus, the CBF encourages commanded translations that improve the collective
+observability of the features over the trajectory window.
+
+\subsection{Comparison with individual-feature constraints}
+
+The average formulation gives a single scalar CBF constraint and therefore
+keeps the QP simple.  However, a strong feature may compensate for a weak one
+inside the average.  If this is not acceptable, the QP can be modified with
+per-feature drift--control constraints:
+\begin{equation}
+  f_i(\bm{x})+\bm{g}_{i}(\bm{x})^{\top}\bm{v}_{B}
+  +\gamma\left(\ell_i-h_{i,\min}\right)\ge0,
+  \qquad i=1,\ldots,s,
+\end{equation}
+where the per-feature drift and control gradient are
+\begin{align}
+  f_i(\bm{x})
+  &= 2\sum_{j=1}^{n-1}
+  \frac{1}{\rho_{i,j}\eta_{i,j}^{2}}
+  \bm{b}_{i,j}^{\top}\bm{M}_{i}^{-1}\bm{\pi}_{i,j}
+  \bm{R}_{C_j}^{A}\bm{R}_{B}^{C}\bm{v}_{B,j},\\[4pt]
+  \bm{g}_{i}(\bm{x})
+  &= \frac{2}{\rho_{i,n}\eta_{i,n}^{2}}
+  \left(\bm{R}_{C_n}^{A}\bm{R}_{B}^{C}\right)^{\top}
+  \bm{\pi}_{i,n}\bm{M}_{i}^{-1}\bm{b}_{i,n}.
+\end{align}
+The implemented formulation uses the average:
+$f(\bm{x})=\frac{1}{s}\sum_{i}f_i$ and
+$\bm{g}(\bm{x})=\frac{1}{s}\sum_{i}\bm{g}_i$.
+
+\subsection{Connection to active perception}
+
+The vector $\bm{g}(\bm{x})$ is the steepest first-order ascent direction of the
+average log-det metric \emph{at the current pose} in the body-frame velocity
+command space.  Therefore, the CBF-QP correction nudges the nominal velocity
+toward translational motions that increase the average triangulation
+observability while preserving nominal trajectory tracking as much as possible.
+The drift $f(\bm{x})$ acts as a bias: if past motion has already provided
+strong observability growth, the CBF constraint is easier to satisfy and less
+correction is needed.
+
+% =========================================================================
+\appendix
+\section{Skew-Symmetric Matrix Identity}
+\label{app:skew_identity}
+
+For any $\bm{a}\in\R^3$,
+\begin{equation}
+  \sx{\bm{a}}^2 = \bm{a}\bm{a}^{\top}-\|\bm{a}\|_2^2\bm{I}.
+\end{equation}
+Since $\sx{\bm{a}}^{\top}=-\sx{\bm{a}}$, it follows that
+\begin{equation}
+  \sx{\bm{a}}^{\top}\sx{\bm{a}}
+  = -\sx{\bm{a}}^2
+  = \|\bm{a}\|_2^2\bm{I}-\bm{a}\bm{a}^{\top}.
+\end{equation}
+With $\bm{a}=\bm{b}_{i,j}$, this gives the projection matrix
+\begin{equation}
+  \bm{\pi}_{i,j}
+  = \eta_{i,j}^{2}\bm{I}-\bm{b}_{i,j}\bm{b}_{i,j}^{\top}.
+\end{equation}
+
+% =========================================================================
+\begin{thebibliography}{9}
+
+\bibitem{ames2019cbf}
+A. D. Ames, S. Coogan, M. Egerstedt, G. Notomista, K. Sreenath, and P. Tabuada,
+\textit{Control Barrier Functions: Theory and Applications},
+Proc. European Control Conference (ECC), 2019.
+
+\bibitem{pukelsheim2006}
+F. Pukelsheim,
+\textit{Optimal Design of Experiments},
+SIAM, 2006.
+
+\bibitem{hausman2017}
+K. Hausman, J. Preiss, G. Sukhatme, and S. Weiss,
+\textit{Observability-Aware Trajectory Optimization for Self-Calibration with Application to UAVs},
+IEEE RA-L, 2017.
+
+\bibitem{chaumette2006}
+F. Chaumette and S. Hutchinson,
+\textit{Visual Servo Control, Part I: Basic Approaches},
+IEEE Robotics \& Automation Magazine, 2006.
+
+\end{thebibliography}
+
+\end{document}

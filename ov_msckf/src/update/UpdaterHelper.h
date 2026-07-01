@@ -25,17 +25,12 @@
 #include <Eigen/Eigen>
 #include <memory>
 #include <unordered_map>
-#include <vector>
 
-#include "feat/FeatureInitializer.h"
 #include "types/LandmarkRepresentation.h"
 
 namespace ov_type {
 class Type;
 } // namespace ov_type
-namespace ov_core {
-class Feature;
-} // namespace ov_core
 
 namespace ov_msckf {
 
@@ -140,69 +135,6 @@ public:
    * @param res Measurement residual
    */
   static void measurement_compress_inplace(Eigen::MatrixXd &H_x, Eigen::VectorXd &res);
-
-  // ============================================================================
-  // Triangulation-Aware CBF (TANGO-VIO) observability metrics
-  // ============================================================================
-
-  /**
-   * @brief Triangulation-observability metrics used by the triangulation-aware CBF.
-   *
-   * These are the quantities consumed by the navigation-level safety filter:
-   * the average log-determinant of the per-feature triangulation information
-   * matrices, the control gradient g(x), and the drift f(x). The metrics can be
-   * computed from either the MSCKF feature set or the persistent SLAM feature set
-   * (selected via UpdaterOptions::cbf_use_slam_features).
-   */
-  struct CbfOutput {
-    double mean_logdet = 0.0;                        ///< Average log-det metric: ℓ̄ = (1/s) Σ log(det(M_i))
-    Eigen::Vector3d g_vec = Eigen::Vector3d::Zero(); ///< CBF control gradient g(x) in body (IMU) frame
-    double drift = 0.0;                              ///< CBF drift f(x) from past poses
-    int num_features = 0;                            ///< Number of features used in the CBF computation
-    bool valid = false;                              ///< True if metrics were successfully computed
-  };
-
-  /**
-   * @brief Persistent exponential-moving-average state for smoothing the CBF metrics.
-   *
-   * Each updater owns one of these so the metric stream is temporally smoothed
-   * across consecutive update calls.
-   */
-  struct CbfEmaState {
-    bool initialized = false;
-    double logdet = 0.0;
-    double drift = 0.0;
-    Eigen::Vector3d g = Eigen::Vector3d::Zero();
-    double alpha = 0.1; ///< EMA smoothing factor (0=full smooth, 1=no smooth)
-  };
-
-  /**
-   * @brief Computes the raw (unsmoothed) triangulation-aware CBF metrics for a feature set.
-   *
-   * For each feature i the per-pose bearings are accumulated into the triangulation
-   * information matrix M_i = Σ_j π_{i,j}, from which ℓ_i = log(det(M_i)) is taken.
-   * The control-affine derivative ḣ = f(x) + g(x)ᵀ v_B is split so that the current
-   * pose contributes the control gradient g(x) and the past poses contribute the
-   * drift f(x). Features must carry valid anchor information (anchor_cam_id,
-   * anchor_clone_timestamp) and an anchor-frame position (p_FinA).
-   *
-   * @param state State of the filter (provides clone poses, current velocity, calibration)
-   * @param feature_vec Features to evaluate (MSCKF or SLAM features)
-   * @param clones_cam Camera clone poses indexed by [cam_id][timestamp]
-   * @return Raw CBF metrics (valid==false if no usable feature was found)
-   */
-  static CbfOutput compute_cbf_metrics(
-      std::shared_ptr<State> state, const std::vector<std::shared_ptr<ov_core::Feature>> &feature_vec,
-      const std::unordered_map<size_t, std::unordered_map<double, ov_core::FeatureInitializer::ClonePose>> &clones_cam);
-
-  /**
-   * @brief Applies EMA smoothing to raw CBF metrics, updating @p ema in place.
-   *
-   * @param raw Raw metrics from compute_cbf_metrics()
-   * @param ema Persistent EMA state (updated in place)
-   * @return Smoothed CBF metrics (valid mirrors @p raw.valid)
-   */
-  static CbfOutput smooth_cbf_metrics(const CbfOutput &raw, CbfEmaState &ema);
 };
 
 } // namespace ov_msckf

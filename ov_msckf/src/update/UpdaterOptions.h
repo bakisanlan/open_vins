@@ -40,15 +40,10 @@ struct UpdaterOptions {
   /// Covariance for our raw pixel measurements
   double sigma_pix_sq = 1;
 
-  /// If true, the triangulation-aware CBF metric is computed from the persistent SLAM
-  /// feature set (matches the TANGO-VIO paper); if false, from the MSCKF feature set.
-  bool cbf_use_slam_features = true;
-
   /// Nice print function of what parameters we have loaded
   void print() {
     PRINT_DEBUG("    - chi2_multipler: %.1f\n", chi2_multipler);
     PRINT_DEBUG("    - sigma_pix: %.2f\n", sigma_pix);
-    PRINT_DEBUG("    - cbf_use_slam_features: %d\n", (int)cbf_use_slam_features);
   }
 };
 

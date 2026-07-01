@@ -25,12 +25,25 @@
     # Master enable switch
     traj_enabled: true
 
-    # Square side length (metres)
-    side_length: 100.0
+    # Trajectory type: 'square', 'straight', 'circle', or 'climb'
+    # 'square'   : Continuous closed-loop B-spline square.
+    # 'straight' : Straight line starting from current pos/heading and stopping at distance.
+    # 'circle'   : Continuous circular path.
+    # 'climb'    : Straight line + simultaneous altitude gain. Stops at end.
+    traj_type: "square"
 
-    # Desired traversal speed (m/s)
+    # Square side length or straight/climb path distance (metres)
+    side_length: 100.0
+    
+    # Radius of the circular path (metres)
+    radius: 30.0
+
+    # Desired traversal speed (m/s — horizontal component)
     # One full loop takes: 4 × side_length / speed  seconds
     speed: 3.0
+
+    # Vertical climb speed for 'climb' trajectory type (m/s, body +Z)
+    climb_speed: 1.0
 
     # Position tracking gain (proportional feedback)
     # Higher → tighter tracking but more aggressive corrections

@@ -478,53 +478,6 @@ void UpdaterSLAM::update(std::shared_ptr<State> state, std::vector<std::shared_p
   PRINT_ALL("[SLAM-UP]: %.4f seconds total\n", (rT3 - rT1).total_microseconds() * 1e-6);
 }
 
-void UpdaterSLAM::compute_cbf(std::shared_ptr<State> state, const std::vector<std::shared_ptr<Feature>> &feature_vec) {
-
-  // Nothing to do if there are no persistent SLAM features tracked this frame
-  if (feature_vec.empty()) {
-    _cbf_output = UpdaterHelper::CbfOutput();
-    return;
-  }
-
-  // Create vector of cloned *CAMERA* poses at each of our clone timesteps (same as the updaters)
-  std::unordered_map<size_t, std::unordered_map<double, FeatureInitializer::ClonePose>> clones_cam;
-  for (const auto &clone_calib : state->_calib_IMUtoCAM) {
-    std::unordered_map<double, FeatureInitializer::ClonePose> clones_cami;
-    for (const auto &clone_imu : state->_clones_IMU) {
-      Eigen::Matrix<double, 3, 3> R_GtoCi = clone_calib.second->Rot() * clone_imu.second->Rot();
-      Eigen::Matrix<double, 3, 1> p_CioinG = clone_imu.second->pos() - R_GtoCi.transpose() * clone_calib.second->pos();
-      clones_cami.insert({clone_imu.first, FeatureInitializer::ClonePose(R_GtoCi, p_CioinG)});
-    }
-    clones_cam.insert({clone_calib.first, clones_cami});
-  }
-
-  // Populate each feature's anchor frame and anchor-frame position from its in-state landmark.
-  // The CBF helper expects feat->anchor_cam_id / anchor_clone_timestamp / p_FinA to be valid.
-  std::vector<std::shared_ptr<Feature>> cbf_feats;
-  cbf_feats.reserve(feature_vec.size());
-  for (const auto &feat : feature_vec) {
-    auto lm_it = state->_features_SLAM.find(feat->featid);
-    if (lm_it == state->_features_SLAM.end())
-      continue;
-    std::shared_ptr<Landmark> landmark = lm_it->second;
-    // Only anchored representations carry an anchor frame for the bearing accumulation
-    if (!LandmarkRepresentation::is_relative_representation(landmark->_feat_representation))
-      continue;
-    feat->anchor_cam_id = landmark->_anchor_cam_id;
-    feat->anchor_clone_timestamp = landmark->_anchor_clone_timestamp;
-    feat->p_FinA = landmark->get_xyz(false);
-    cbf_feats.push_back(feat);
-  }
-
-  // Compute and smooth the triangulation-aware CBF metric
-  UpdaterHelper::CbfOutput raw = UpdaterHelper::compute_cbf_metrics(state, cbf_feats, clones_cam);
-  _cbf_output = UpdaterHelper::smooth_cbf_metrics(raw, _cbf_ema);
-  if (_cbf_output.valid) {
-    PRINT_INFO(CYAN "[CBF-SLAM]: feats=%d | logdet=%.4f | drift=%.6f | g=[%.6f, %.6f, %.6f]\n" RESET, _cbf_output.num_features,
-               _cbf_output.mean_logdet, _cbf_output.drift, _cbf_output.g_vec(0), _cbf_output.g_vec(1), _cbf_output.g_vec(2));
-  }
-}
-
 void UpdaterSLAM::change_anchors(std::shared_ptr<State> state) {
 
   // Return if we do not have enough clones

@@ -161,6 +161,8 @@ protected:
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr pub_cbf_g;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_drift;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_num_features;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_tri_tried;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_tri_success;
 
   // Our subscribers and camera synchronizers
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;

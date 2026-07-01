@@ -125,8 +125,8 @@ public:
   /// Returns the latest CBF observability metrics from the MSCKF updater
   UpdaterMSCKF::CbfOutput get_cbf_output();
 
-  /// Set the EMA smoothing factor for CBF logdet/psi (applied to both updaters)
-  void set_cbf_ema_alpha(double alpha);
+  /// Set the EMA smoothing factor for CBF logdet/psi
+  void set_cbf_ema_alpha(double alpha) { updaterMSCKF->set_ema_alpha(alpha); }
 
   /// Return the image used when projecting the active tracks
   void get_active_image(double &timestamp, cv::Mat &image) {

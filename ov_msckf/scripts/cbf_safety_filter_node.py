@@ -51,11 +51,35 @@ class CbfSafetyFilterNode(Node):
         self.declare_parameter("plot_show_features", False)   # show feature count panel
         self.declare_parameter("plot_window_sec", 5.0)        # time window in seconds
 
-        # Diagonal weight matrix W = diag(w1, w2, w3)
-        # Larger weight → less correction in that axis
-        self.declare_parameter("cbf_w1", 1.0)
-        self.declare_parameter("cbf_w2", 1.0)
-        self.declare_parameter("cbf_w3", 1.0)
+        # ── Nominal-direction-weighted CBF-QP metric (TANGO-VIO Eq. 37-46) ──
+        # W_B = w_∥ P_∥ + w_⊥ P_⊥  where:
+        #   t_B = v_nom / ‖v_nom‖   (unit nominal direction, body frame)
+        #   P_∥ = t_B t_Bᵀ          (tangent projection)
+        #   P_⊥ = I − t_B t_Bᵀ      (perpendicular projection)
+        #
+        # The condition 0 < w_∥ < w_⊥ penalises lateral deviations more
+        # than along-track speed changes, so the CBF preferentially modifies
+        # speed before heading.  W_B⁻¹ = (1/w_∥) P_∥ + (1/w_⊥) P_⊥.
+        #
+        # cbf_w_parallel      : tangent weight (smaller → allow more speed change)
+        # cbf_w_perpendicular : lateral weight (larger → resist heading change)
+        # cbf_v_epsilon       : low-speed threshold below which W_B = w_∥ I
+        self.declare_parameter("cbf_w_parallel", 1.0)
+        self.declare_parameter("cbf_w_perpendicular", 10.0)
+        self.declare_parameter("cbf_v_epsilon", 0.1)
+
+        # Soft-CBF slack penalty p_T.
+        # Controls the trade-off between trajectory preservation and
+        # triangulation maintenance.  The relaxed CBF condition is:
+        #   f + gᵀ v_B + γ h + δ_T ≥ 0,   δ_T ≥ 0
+        # with cost  ½ ‖v-v_nom‖²_W + (p_T/2) δ_T².
+        #
+        #   p_T → ∞  : hard CBF (no relaxation, full correction)
+        #   p_T large: small slack, close to hard CBF
+        #   p_T small: large slack, velocity stays close to nominal
+        #
+        # Set very large (e.g. 1e6) to recover the hard-CBF behaviour.
+        self.declare_parameter("cbf_p_T", 100.0)
 
         # Output smoothing: EMA on v_safe
         # 1.0 = no smoothing (raw CBF), 0.1 = very smooth
@@ -97,11 +121,11 @@ class CbfSafetyFilterNode(Node):
         self.show_velocity = self.get_parameter("plot_show_velocity").value
         self.show_features = self.get_parameter("plot_show_features").value
 
-        w1 = self.get_parameter("cbf_w1").value
-        w2 = self.get_parameter("cbf_w2").value
-        w3 = self.get_parameter("cbf_w3").value
-        # W^{-1} = diag(1/w1, 1/w2, 1/w3)
-        self.W_inv = np.diag([1.0 / w1, 1.0 / w2, 1.0 / w3])
+        # Weighted CBF-QP metric
+        self.w_par = self.get_parameter("cbf_w_parallel").value
+        self.w_perp = self.get_parameter("cbf_w_perpendicular").value
+        self.v_epsilon = self.get_parameter("cbf_v_epsilon").value
+        self.p_T = self.get_parameter("cbf_p_T").value
 
         topic_sub_logdet = self.get_parameter("topic_sub_mean_logdet").value
         topic_sub_g = self.get_parameter("topic_sub_g").value
@@ -121,6 +145,8 @@ class CbfSafetyFilterNode(Node):
         self._csv_writer = None
         self._drone_pos = [float('nan')] * 3      # latest ENU position
         self._num_slam_features = 0                # latest SLAM feature count
+        self._tri_tried = 0                        # latest triangulation attempts
+        self._tri_success = 0                      # latest triangulation successes
 
         if self.log_enabled:
             log_dir = os.path.expanduser(log_dir_raw)
@@ -136,6 +162,8 @@ class CbfSafetyFilterNode(Node):
                 'v_cbf_x', 'v_cbf_y', 'v_cbf_z', 'v_cbf_norm',
                 'drone_x', 'drone_y', 'drone_z',
                 'num_slam_features',
+                'tri_tried', 'tri_success',
+                'mu_margin', 'delta_T', 'f_drift',
             ])
             self._log_file.flush()
             self.get_logger().info(f"Logging to: {log_path}")
@@ -145,7 +173,8 @@ class CbfSafetyFilterNode(Node):
         self.get_logger().info(
             f"CBF Safety Filter: enabled={self.cbf_enabled}, "
             f"gamma={self.gamma:.2f}, h_min={self.h_min:.2f}, "
-            f"W=diag({w1:.1f}, {w2:.1f}, {w3:.1f}), "
+            f"W_B: w_∥={self.w_par:.2f}, w_⊥={self.w_perp:.2f}, "
+            f"ε_v={self.v_epsilon:.3f}, "
             f"plot_window={self.plot_window_sec:.1f}s"
         )
 
@@ -255,11 +284,25 @@ class CbfSafetyFilterNode(Node):
             callback_group=self._data_group
         )
 
+        # ── Triangulation count subscribers ──
+        self.sub_tri_tried = self.create_subscription(
+            Float64, 'cbf/tri_tried', self._cb_tri_tried, qos,
+            callback_group=self._data_group
+        )
+        self.sub_tri_success = self.create_subscription(
+            Float64, 'cbf/tri_success', self._cb_tri_success, qos,
+            callback_group=self._data_group
+        )
+
         # ── Publishers ──
         self.pub_v_safe = self.create_publisher(Vector3Stamped, topic_pub_v_safe, 10)
         self.pub_active = self.create_publisher(Bool, topic_pub_active, 10)
         self.pub_barrier = self.create_publisher(Float64, topic_pub_barrier, 10)
         self.pub_cmd_vel_ap = self.create_publisher(TwistStamped, topic_pub_cmd_vel_ap, 10)
+
+        # ── Periodic log timer (runs even when CBF is inactive) ──
+        self._log_timer = self.create_timer(0.1, self._timer_log_cb)  # 10 Hz
+        self._cbf_logged_this_tick = False  # flag to avoid double-logging
 
         self.get_logger().info("CBF node ready — waiting for topics...")
 
@@ -295,7 +338,7 @@ class CbfSafetyFilterNode(Node):
         q = msg.pose.pose.orientation
         qvec = [q.x, q.y, q.z, q.w]
         # Guard against zero-norm quaternion (before OpenVINS initializes)
-        if (q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w) < 1e-10:
+        if np.any(np.isnan(qvec)) or (q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w) < 1e-10:
             return
         rot = Rotation.from_quat(qvec)
         self.R_ItoG = rot.as_matrix()  # 3×3, maps body→global
@@ -319,6 +362,14 @@ class CbfSafetyFilterNode(Node):
     def _cb_slam_points(self, msg: PointCloud2):
         """Receive SLAM feature point cloud — extract count from width field."""
         self._num_slam_features = msg.width * msg.height
+
+    def _cb_tri_tried(self, msg: Float64):
+        """Receive number of features attempted for triangulation."""
+        self._tri_tried = int(msg.data)
+
+    def _cb_tri_success(self, msg: Float64):
+        """Receive number of features successfully triangulated."""
+        self._tri_success = int(msg.data)
 
     def _enable_mavros_local_position(self):
         """Call MAVROS set_message_interval service to publish LOCAL_POSITION_NED at 20 Hz."""
@@ -346,7 +397,27 @@ class CbfSafetyFilterNode(Node):
             self._log_file.close()
             self.get_logger().info("CSV log file closed.")
 
-    def _write_log_row(self, t, logdet, h_min, v_nom, v_safe):
+    def _timer_log_cb(self):
+        """Periodic fallback logger — runs at 10 Hz even when CBF g(x) is not arriving."""
+        if not self.log_enabled:
+            return
+        # If the CBF path already logged this tick, skip to avoid duplicates
+        if self._cbf_logged_this_tick:
+            self._cbf_logged_this_tick = False
+            return
+        # Write a row with NaN for CBF-dependent fields
+        # Skip if t0 hasn't been set yet (no CBF data received at all)
+        if self.t0 is None:
+            return
+        t = self.get_clock().now().nanoseconds * 1e-9 - self.t0
+        v_nom = self.v_nom_body.copy()
+        nan3 = np.array([float('nan')] * 3)
+        self._write_log_row(
+            t, float('nan'), self.h_min, v_nom, nan3,
+            float('nan'), float('nan'), float('nan')
+        )
+
+    def _write_log_row(self, t, logdet, h_min, v_nom, v_safe, mu, delta_T, f_drift):
         """Write a single row to the CSV log."""
         if self._csv_writer is None:
             return
@@ -360,6 +431,11 @@ class CbfSafetyFilterNode(Node):
             f"{self._drone_pos[0]:.6f}", f"{self._drone_pos[1]:.6f}",
             f"{self._drone_pos[2]:.6f}",
             self._num_slam_features,
+            self._tri_tried,
+            self._tri_success,
+            f"{mu:.6f}",
+            f"{delta_T:.6f}",
+            f"{f_drift:.6f}",
         ])
         # Flush periodically (every ~50 rows) for safety without perf hit
         if not hasattr(self, '_log_row_count'):
@@ -427,6 +503,7 @@ class CbfSafetyFilterNode(Node):
 
         g_norm_sq = np.dot(self.g_vec, self.g_vec)
         cbf_active = False
+        delta_T = 0.0           # soft-CBF slack (0 when inactive)
         v_safe = v_nom.copy()
         self._v_safe_prev = getattr(self, '_v_safe_prev', None)  # lazy init
 
@@ -434,34 +511,48 @@ class CbfSafetyFilterNode(Node):
         margin = self.drift + np.dot(self.g_vec, v_nom) + self.gamma * h
 
         if self.cbf_enabled and g_norm_sq > 1e-20:
-            # ── Closed-form CBF-QP (Eq. closed_form_average) ──────────────
+            # ── Weighted CBF-QP (TANGO-VIO Eq. 37-46) ─────────────────────
             #
-            # Drift-control decomposition:
-            #   ḣ = f(x) + g(x)ᵀ v_B
+            #   QP:  min ½ ‖v_B − v_nom‖²_{W_B}   s.t.  f + gᵀ v_B + γ h ≥ 0
             #
-            # CBF condition:  f(x) + g(x)ᵀ v_B + γ h ≥ 0
+            #   W_B = w_∥ P_∥ + w_⊥ P_⊥
+            #   P_∥ = t_B t_Bᵀ,  P_⊥ = I − t_B t_Bᵀ,  t_B = v_nom/‖v_nom‖
             #
-            # QP:  min ||v_B - v_nom||²  s.t. CBF condition
+            #   Closed-form (Eq. 42):
+            #     μ = f + gᵀ v_nom + γ h
+            #     if μ ≥ 0:  v* = v_nom
+            #     if μ < 0:  v* = v_nom − (μ / (gᵀ W_B⁻¹ g)) W_B⁻¹ g
             #
-            # Closed-form solution (half-space projection):
-            #   margin = f + gᵀ v_nom + γ h
-            #   if margin ≥ 0:  v* = v_nom               (already safe)
-            #   if margin < 0:  v* = v_nom - (margin / ||g||²) g
-            #
-            # g(x) is in body frame → projection is done in body frame directly.
+            #   W_B⁻¹ = (1/w_∥) P_∥ + (1/w_⊥) P_⊥
+            #   Low-speed fallback: W_B = w_∥ I  ⇒  W_B⁻¹ = (1/w_∥) I
 
-            if margin < 0:
-                # Nominal violates the CBF → project onto the safe half-space
-                lam = -margin / g_norm_sq
-                v_safe = v_nom + lam * self.g_vec
+            # Build W_B⁻¹ from instantaneous nominal direction
+            v_nom_norm = np.linalg.norm(v_nom)
+            if v_nom_norm > self.v_epsilon:
+                # Normal: direction-dependent weighting
+                t_B = v_nom / v_nom_norm                            # unit tangent
+                P_par = np.outer(t_B, t_B)                          # P_∥ = t_B t_Bᵀ
+                P_perp = np.eye(3) - P_par                          # P_⊥ = I - P_∥
+                W_inv = (1.0 / self.w_par) * P_par + (1.0 / self.w_perp) * P_perp
+            else:
+                # Low-speed fallback (Eq. 46): isotropic W_B = w_∥ I
+                W_inv = (1.0 / self.w_par) * np.eye(3)
+
+            # Weighted gradient: W_B⁻¹ g(x)
+            W_inv_g = W_inv @ self.g_vec
+            # Denominator: gᵀ W_B⁻¹ g
+            gT_Winv_g = np.dot(self.g_vec, W_inv_g)
+
+            if margin < 0 and gT_Winv_g > 1e-20:
+                # Soft-CBF: denominator includes slack penalty 1/p_T
+                # v* = v_nom − (μ / (S(x) + 1/p_T)) W_B⁻¹ g
+                # δ_T* = −μ / (1 + p_T S(x))
+                S_x = gT_Winv_g
+                lam = -margin / (S_x + 1.0 / self.p_T)
+                v_safe = v_nom + lam * W_inv_g
+                delta_T = -margin / (1.0 + self.p_T * S_x)
                 cbf_active = True
 
-        # ── Feature-count guard ──
-        # If SLAM features drop below threshold, force stop (v_safe = 0)
-        if (self.min_features >= 0
-                and self._num_slam_features < self.min_features):
-            v_safe = np.zeros(3)
-            cbf_active = True
 
         # ── Output smoothing (EMA low-pass filter) ──
         if self._v_safe_prev is not None and self.output_alpha < 1.0:
@@ -520,12 +611,14 @@ class CbfSafetyFilterNode(Node):
 
         # ── Write to CSV log ──
         if self.log_enabled:
-            self._write_log_row(t, self.mean_logdet, self.h_min, v_nom, v_safe)
+            self._write_log_row(t, self.mean_logdet, self.h_min, v_nom, v_safe, margin, delta_T, self.drift)
+            self._cbf_logged_this_tick = True
 
         # Console log (throttled)
         status = "ACTIVE" if cbf_active else "ok"
         self.get_logger().info(
-            f"[CBF] h={h:.4f} | margin={margin:.4f} | f={self.drift:.4f} | g=[{self.g_vec[0]:.4f},{self.g_vec[1]:.4f},{self.g_vec[2]:.4f}] "
+            f"[CBF] h={h:.4f} | μ={margin:.4f} | δ_T={delta_T:.4f} | f={self.drift:.4f} | "
+            f"g=[{self.g_vec[0]:.4f},{self.g_vec[1]:.4f},{self.g_vec[2]:.4f}] "
             f"| ||v_safe||={np.linalg.norm(v_safe):.4f} | {status}",
             throttle_duration_sec=0.1,
         )

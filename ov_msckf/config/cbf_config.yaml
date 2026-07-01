@@ -29,19 +29,41 @@
     # The effective alpha is scaled by (num_features / 10), so
     # frames with few features are automatically trusted less.
     # Range: 0.01 – 1.0"
-    cbf_ema_alpha: 0.01
+    cbf_ema_alpha: 0.3
 
-    # Diagonal weight matrix W = diag(w1, w2, w3) for the CBF-QP.
-    # The QP minimises (v - v_nom)^T W (v - v_nom) subject to the CBF constraint.
+    # Nominal-direction-weighted CBF-QP metric (TANGO-VIO Eq. 37-46).
+    # W_B = w_∥ P_∥ + w_⊥ P_⊥  where:
+    #   t_B = v_nom / ‖v_nom‖   (unit nominal direction, body frame)
+    #   P_∥ = t_B t_Bᵀ          (tangent projection)
+    #   P_⊥ = I − t_B t_Bᵀ      (perpendicular projection)
     #
-    # Larger weight → less correction in that axis.
-    # Set w3 very large (e.g. 1e6) to prevent CBF from changing the z-velocity
-    # (altitude rate), so only lateral corrections are applied.
+    # The condition 0 < w_∥ < w_⊥ penalises lateral deviations more
+    # than along-track speed changes, so when the CBF becomes active
+    # it preferentially modifies speed before heading.
     #
-    # W = I  is the standard minimum-norm projection (Eq. closed_form_average).
-    cbf_w1: 1.0
-    cbf_w2: 1.0
-    cbf_w3: 1000000.0
+    # W_B⁻¹ = (1/w_∥) P_∥ + (1/w_⊥) P_⊥
+    #
+    # When ‖v_nom‖ ≤ cbf_v_epsilon the tangent direction is ambiguous;
+    # in that case W_B falls back to the isotropic metric w_∥ I.
+    #
+    # w_∥ = w_⊥ = 1 recovers the standard unweighted minimum-norm projection.
+    cbf_w_parallel: 1.0
+    cbf_w_perpendicular: 100.0
+    cbf_v_epsilon: 0.1
+
+    # Soft-CBF slack penalty p_T.
+    # Controls the trade-off between trajectory preservation and
+    # triangulation maintenance.  A nonnegative slack δ_T is introduced:
+    #   min  ½ ‖v − v_nom‖²_W + (p_T/2) δ_T²
+    #   s.t. f + gᵀ v + γ h + δ_T ≥ 0,   δ_T ≥ 0
+    #
+    # p_T → ∞ (or very large, e.g. 1e6): hard CBF (full correction)
+    # p_T large (e.g. 100): near-hard, small slack allowed
+    # p_T small (e.g. 1):   large slack, velocity stays close to nominal
+    #
+    # This allows the drone to stop / hover even when the hard CBF would
+    # demand a large velocity correction.
+    cbf_p_T: 100000000000000000000000000000000.0
 
     # Output velocity smoothing (EMA low-pass filter on v_safe).
     # Prevents jumpy commands from logdet/g discontinuities due to
@@ -51,11 +73,6 @@
     #   0.1 = very smooth (may lag behind fast changes)
     cbf_output_alpha: 0.1
 
-    # Minimum SLAM feature count guard.
-    # If the number of visible SLAM features drops below this threshold,
-    # CBF forces v_safe = 0 (emergency stop) regardless of the margin.
-    # Set to -1 to disable this guard entirely.
-    cbf_min_features: 10
 
     # Live plot enable/disable.
     # Set to false for maximum CBF publish rate (no GUI overhead).

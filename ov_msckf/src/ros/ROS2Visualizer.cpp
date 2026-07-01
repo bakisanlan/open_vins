@@ -89,6 +89,10 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   PRINT_DEBUG("Publishing: %s\n", pub_cbf_drift->get_topic_name());
   pub_cbf_num_features = node->create_publisher<std_msgs::msg::Float64>("cbf/num_features", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_cbf_num_features->get_topic_name());
+  pub_cbf_tri_tried = node->create_publisher<std_msgs::msg::Float64>("cbf/tri_tried", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_cbf_tri_tried->get_topic_name());
+  pub_cbf_tri_success = node->create_publisher<std_msgs::msg::Float64>("cbf/tri_success", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_cbf_tri_success->get_topic_name());
 
   // option to enable publishing of global to IMU transformation
   if (node->has_parameter("publish_global_to_imu_tf")) {
@@ -293,6 +297,15 @@ void ROS2Visualizer::visualize() {
       std_msgs::msg::Float64 nfeat_msg;
       nfeat_msg.data = static_cast<double>(cbf.num_features);
       pub_cbf_num_features->publish(nfeat_msg);
+
+      // Publish triangulation counts (tried/success)
+      std_msgs::msg::Float64 tri_tried_msg;
+      tri_tried_msg.data = static_cast<double>(cbf.tri_tried);
+      pub_cbf_tri_tried->publish(tri_tried_msg);
+
+      std_msgs::msg::Float64 tri_success_msg;
+      tri_success_msg.data = static_cast<double>(cbf.tri_success);
+      pub_cbf_tri_success->publish(tri_success_msg);
     }
   }
 
