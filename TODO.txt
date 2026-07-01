@@ -1,0 +1,2 @@
+*there is mismatch between pathimu and other states(msckf, slam points) when yaw_enabled
+*there is orientation offset between gt local and VIO state even yaw_enabled

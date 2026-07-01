@@ -50,6 +50,8 @@ class State;
 class StateHelper;
 class UpdaterSLAM;
 class UpdaterZeroVelocity;
+class UpdaterBaro;
+class UpdaterYaw;
 class Propagator;
 
 /**
@@ -81,6 +83,13 @@ public:
   void feed_measurement_camera(const ov_core::CameraData &message) { track_image_and_update(message); }
 
   /**
+   * @brief Feed function for sequential barometric altimeter data
+   * @param timestamp Time of the barometric measurement
+   * @param altitude Relative altitude from the initialization position
+   */
+  void feed_measurement_baro(double timestamp, double altitude);
+
+  /**
    * @brief Feed function for a synchronized simulated cameras
    * @param timestamp Time that this image was collected
    * @param camids Camera ids that we have simulated measurements for
@@ -88,6 +97,12 @@ public:
    */
   void feed_measurement_simulation(double timestamp, const std::vector<int> &camids,
                                    const std::vector<std::vector<std::pair<size_t, Eigen::VectorXf>>> &feats);
+
+  /**
+   * @brief Feed function for magnetometer yaw measurements
+   * @param message Contains our timestamp and yaw angle in ENU (rad)
+   */
+  void feed_measurement_yaw(const ov_core::YawData &message);
 
   /**
    * @brief Given a state, this will initialize our IMU state.
@@ -211,6 +226,14 @@ protected:
 
   /// Our zero velocity tracker
   std::shared_ptr<UpdaterZeroVelocity> updaterZUPT;
+
+  /// Our barometric altimeter updater
+  std::shared_ptr<UpdaterBaro> updaterBaro;
+
+  /// Queue for sequential altitude updates
+  std::vector<std::pair<double, double>> baro_queue;
+  /// Our magnetometer yaw updater
+  std::shared_ptr<UpdaterYaw> updaterYaw;
 
   /// This is the queue of measurement times that have come in since we starting doing initialization
   /// After we initialize, we will want to prop & update to the latest timestamp quickly

@@ -78,6 +78,26 @@ struct CameraData {
   }
 };
 
+/**
+ * @brief Struct for a single yaw measurement from magnetometer (time, yaw, sigma)
+ *
+ * The yaw angle should be in NED convention (0 = North, positive clockwise) in radians.
+ */
+struct YawData {
+
+  /// Timestamp of the reading
+  double timestamp;
+
+  /// Yaw angle in radians (NED: 0 = North, positive clockwise)
+  double yaw;
+
+  /// Standard deviation of the yaw measurement in radians
+  double sigma;
+
+  /// Sort function to allow for using of STL containers
+  bool operator<(const YawData &other) const { return timestamp < other.timestamp; }
+};
+
 } // namespace ov_core
 
 #endif // OV_CORE_SENSOR_DATA_H

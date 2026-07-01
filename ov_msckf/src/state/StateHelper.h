@@ -229,6 +229,20 @@ public:
    */
   static void marginalize_slam(std::shared_ptr<State> state);
 
+  /**
+   * @brief Inflate the covariance of a variable along a specified direction.
+   *
+   * Used to prevent the filter from becoming overconfident in unobservable directions
+   * (e.g. yaw in VIO). Adds process noise along the direction h in the variable's error state.
+   *
+   * @param state Pointer to state
+   * @param variable Variable whose covariance block to inflate
+   * @param h Direction vector in the variable's error state (will be normalized internally)
+   * @param inflate_amount Amount of variance to add along direction h
+   */
+  static void inflate_covariance(std::shared_ptr<State> state, std::shared_ptr<ov_type::Type> variable, const Eigen::VectorXd &h,
+                                 double inflate_amount);
+
 private:
   /**
    * All function in this class should be static.

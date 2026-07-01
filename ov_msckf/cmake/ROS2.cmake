@@ -13,6 +13,8 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(ov_core REQUIRED)
 find_package(ov_init REQUIRED)
+find_package(geographic_msgs REQUIRED)
+find_package(mavros_msgs REQUIRED)
 
 # Describe ROS project
 option(ENABLE_ROS "Enable or disable building with ROS (if it is found)" ON)
@@ -47,6 +49,8 @@ list(APPEND ament_libraries
         image_transport
         ov_core
         ov_init
+        geographic_msgs
+        mavros_msgs
 )
 
 ##################################################
@@ -65,6 +69,8 @@ list(APPEND LIBRARY_SOURCES
         src/update/UpdaterMSCKF.cpp
         src/update/UpdaterSLAM.cpp
         src/update/UpdaterZeroVelocity.cpp
+        src/update/UpdaterBaro.cpp
+        src/update/UpdaterYaw.cpp
 )
 list(APPEND LIBRARY_SOURCES src/ros/ROS2Visualizer.cpp src/ros/ROSVisualizerHelper.cpp)
 file(GLOB_RECURSE LIBRARY_HEADERS "src/*.h")

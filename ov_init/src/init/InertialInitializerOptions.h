@@ -150,7 +150,7 @@ struct InertialInitializerOptions {
       init_dyn_bias_g << bias_g.at(0), bias_g.at(1), bias_g.at(2);
       init_dyn_bias_a << bias_a.at(0), bias_a.at(1), bias_a.at(2);
       // Parse zupt_max_disparity (note: this is set from VioManager, but can be overridden in config)
-      parser->parse_config("init_zupt_max_disparity", init_zupt_max_disparity);
+      parser->parse_config("init_zupt_max_disparity", init_zupt_max_disparity, false);
     }
     PRINT_DEBUG("  - init_window_time: %.2f\n", init_window_time);
     PRINT_DEBUG("  - init_imu_thresh: %.2f\n", init_imu_thresh);
