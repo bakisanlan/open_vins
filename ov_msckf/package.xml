@@ -51,6 +51,7 @@
     <depend condition="$ROS_VERSION == 2">ov_init</depend>
     <depend condition="$ROS_VERSION == 2">geographic_msgs</depend>
     <depend condition="$ROS_VERSION == 2">mavros_msgs</depend>
+    <exec_depend condition="$ROS_VERSION == 2">rclpy</exec_depend>
 
     <!-- System dependencies for both versions -->
     <depend>eigen</depend>

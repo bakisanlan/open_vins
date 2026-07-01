@@ -10,3 +10,4 @@ doc
 .vscode
 /install
 /log
+/ov_msckf/launch

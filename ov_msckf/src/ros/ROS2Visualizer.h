@@ -25,6 +25,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <image_transport/image_transport.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -174,6 +175,14 @@ protected:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud>::SharedPtr pub_loop_point;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr pub_loop_intrinsics;
   std::shared_ptr<tf2_ros::TransformBroadcaster> mTfBr;
+
+  // CBF observability publishers
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_mean_logdet;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr pub_cbf_g;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_drift;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_num_features;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_tri_tried;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_cbf_tri_success;
 
   // Our subscribers and camera synchronizers
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;

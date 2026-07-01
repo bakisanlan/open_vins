@@ -21,6 +21,8 @@
 
 #include "FeatureInitializer.h"
 
+#include <limits>
+
 #include "Feature.h"
 #include "utils/print.h"
 #include "utils/quat_ops.h"
@@ -29,7 +31,7 @@ using namespace ov_core;
 
 bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
                                               std::unordered_map<size_t, std::unordered_map<double, ClonePose>> &clonesCAM,
-                                              double *cond_number_out) {
+                                              double *cond_number_out, double *logdet_out) {
 
   // Total number of measurements
   // Also set the first measurement to be the anchor frame
@@ -98,6 +100,23 @@ bool FeatureInitializer::single_triangulation(std::shared_ptr<Feature> feat,
   // Output the condition number if requested (for aggregate statistics)
   if (cond_number_out != nullptr) {
     *cond_number_out = std::abs(condA);
+  }
+
+  // Compute log(det(M_i)) for the per-feature triangulation observability metric.
+  // A (= M_i) is symmetric PSD, so its singular values equal its eigenvalues.
+  // log(det(M_i)) = sum of log(eigenvalues).  This is the metric ell_i from the CBF paper.
+  if (logdet_out != nullptr) {
+    double logdet = 0.0;
+    bool valid_logdet = true;
+    for (int k = 0; k < singularValues.rows(); k++) {
+      if (singularValues(k, 0) > 1e-12) {
+        logdet += std::log(singularValues(k, 0));
+      } else {
+        valid_logdet = false;
+        break;
+      }
+    }
+    *logdet_out = valid_logdet ? logdet : -std::numeric_limits<double>::infinity();
   }
 
   // If we have a bad condition number, or it is too close

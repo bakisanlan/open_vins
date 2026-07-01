@@ -49,6 +49,22 @@ class UpdaterMSCKF {
 
 public:
   /**
+   * @brief CBF observability metrics computed during each MSCKF update.
+   *
+   * These values are set by update() and can be read by VioManager/ROS2Visualizer
+   * for publishing as ROS topics.
+   */
+  struct CbfOutput {
+    double mean_logdet = 0.0;            ///< Average log-det metric: ℓ̄ = (1/s) Σ log(det(M_i))
+    Eigen::Vector3d g_vec = Eigen::Vector3d::Zero(); ///< CBF control gradient g(x) in body (IMU) frame
+    double drift = 0.0;                  ///< CBF drift f(x) from past poses
+    int num_features = 0;                ///< Number of features used in the CBF computation
+    int tri_tried = 0;                   ///< Number of features attempted for triangulation
+    int tri_success = 0;                 ///< Number of features successfully triangulated
+    bool valid = false;                  ///< True if CBF metrics were successfully computed
+  };
+
+  /**
    * @brief Default constructor for our MSCKF updater
    *
    * Our updater has a feature initializer which we use to initialize features as needed.
@@ -67,6 +83,12 @@ public:
    */
   void update(std::shared_ptr<State> state, std::vector<std::shared_ptr<ov_core::Feature>> &feature_vec);
 
+  /// Accessor for the latest CBF output (computed during the last update() call)
+  const CbfOutput &get_cbf_output() const { return _cbf_output; }
+
+  /// Set the EMA smoothing factor for CBF metrics (0=full smooth, 1=no smooth)
+  void set_ema_alpha(double alpha) { _ema_alpha = alpha; }
+
 protected:
   /// Options used during update
   UpdaterOptions _options;
@@ -76,6 +98,17 @@ protected:
 
   /// Chi squared 95th percentile table (lookup would be size of residual)
   std::map<int, double> chi_squared_table;
+
+  /// Latest CBF output from the most recent update() call
+  CbfOutput _cbf_output;
+
+  /// EMA state for smoothing CBF metrics
+  bool _ema_initialized = false;
+  double _ema_logdet = 0.0;
+  double _ema_drift = 0.0;
+  Eigen::Vector3d _ema_g = Eigen::Vector3d::Zero();
+  static constexpr double _ema_alpha_default = 0.1;
+  double _ema_alpha = _ema_alpha_default; ///< EMA smoothing factor (0=full smooth, 1=no smooth)
 };
 
 } // namespace ov_msckf

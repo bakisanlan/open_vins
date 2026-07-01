@@ -822,3 +822,4 @@ void VioManager::feed_measurement_baro(double timestamp, double altitude) {
   // Push the new baro measurement into the queue
   baro_queue.push_back({timestamp, altitude});
 }
+UpdaterMSCKF::CbfOutput VioManager::get_cbf_output() { return updaterMSCKF->get_cbf_output(); }

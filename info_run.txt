@@ -1,0 +1,27 @@
+ros2 launch ardupilot_gz_bringup iris_rubicon.launch.py world_name:=itu_satellite x:=-350 y:=-100 z:=0.5
+mavproxy.py --master=tcp:127.0.0.1:5762 --console --map
+ros2 launch ardupilot_gz_bringup mavros_fake_gps.launch.py
+
+ros2 launch ov_msckf subscribe.launch.py config:=my_config max_cameras:=1
+rviz2 -d ~/ros2_ws/src/open_vins/ov_msckf/launch/display_ros2.rviz
+
+ros2 run ov_msckf cbf_safety_filter_node.py --ros-args -r __ns:=/ov_msckf --params-file $(ros2 pkg prefix ov_msckf --share)/config/cbf_config.yaml
+ros2 topic pub /ov_msckf/cmd_vel_nom geometry_msgs/msg/TwistStamped   "{header: {frame_id: 'base_link'}, twist: {linear: {x: 3.0, y: 0.0, z: 1.0}}}" -r 10
+python keyboard_joy_node.py ros2 run ov_msckf bspline_traj_node.py --ros-args     -r __ns:=/ap     --params-file $(ros2 pkg prefix ov_msckf --share)/config/bspline_traj_config.yaml
+
+~/ros2_ws/src/open_vins/ov_msckf/scripts$ python plot_cbf_log.py 
+
+python3 -c "
+import rclpy, struct
+from sensor_msgs.msg import PointCloud2
+
+rclpy.init()
+node = rclpy.create_node('z_echo')
+
+def cb(msg):
+    zs = [struct.unpack_from('f', bytes(msg.data), i*msg.point_step + 8)[0] for i in range(msg.width)]
+    print(f'z values ({len(zs)} pts): {[round(z,3) for z in zs]}')
+    print('---')
+
+node.create_subscription(PointCloud2, '/ov_msckf/points_msckf', cb, 10)
+rclpy.spin(node)

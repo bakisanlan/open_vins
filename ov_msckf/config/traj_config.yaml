@@ -1,0 +1,44 @@
+##############################################################################
+# Square Trajectory Node Configuration
+#
+# Generates a square nominal velocity trajectory for CBF safety filter testing.
+#
+# Square layout (top view):
+#
+#   WP3 ←─(fast)──── WP2
+#    │                 │
+#  (slow)           (fast)
+#    │                 │
+#   WP0 ──(slow)───► WP1
+##############################################################################
+
+"/**":
+  ros__parameters:
+
+    # Master enable switch — set to false to disable trajectory generation
+    # (node stays alive but publishes zero velocity)
+    traj_enabled: true
+
+    # Side length of the square in metres
+    traj_side_length: 30.0
+
+    # Speed for slow segments (WP0→WP1, WP2→WP3)  [m/s]  range: 0–2
+    traj_slow_speed: 3.0
+
+    # Speed for fast segments (WP1→WP2, WP3→WP0)  [m/s]  range: 5–10
+    traj_fast_speed: 7.0
+
+    # Waypoint acceptance radius [m]
+    # When distance to current waypoint < this, advance to next
+    traj_accept_radius: 5.0
+
+    # Repeat the square loop indefinitely
+    traj_repeat: true
+
+    # Keep the z (altitude) component of the velocity command zero
+    # (altitude is controlled separately by the flight controller)
+    traj_hold_altitude: true
+
+    # Topics
+    topic_odom: "odomimu"
+    topic_cmd_vel_nom: "cmd_vel_nom31"
