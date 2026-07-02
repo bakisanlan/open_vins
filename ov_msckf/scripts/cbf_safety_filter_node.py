@@ -40,6 +40,10 @@ class CbfSafetyFilterNode(Node):
     def __init__(self):
         super().__init__("cbf_safety_filter")
 
+        # ── Flight file logger (mirrors all get_logger() output to cbf.log) ──
+        from flight_logger import setup_flight_logger
+        setup_flight_logger(self, "cbf.log")
+
         # ── CBF parameters ──
         self.declare_parameter("cbf_enabled", True)
         self.declare_parameter("cbf_gamma", 1.0)
@@ -85,6 +89,10 @@ class CbfSafetyFilterNode(Node):
         # 1.0 = no smoothing (raw CBF), 0.1 = very smooth
         self.declare_parameter("cbf_output_alpha", 0.3)
 
+        # Maximum speed and acceleration limits for v_safe
+        self.declare_parameter("cbf_v_safe_max", 5.0)   # m/s
+        self.declare_parameter("cbf_acc_max", 2.0)       # m/s²
+
         # Minimum SLAM feature threshold.
         # If the number of SLAM features drops below this, CBF forces the drone
         # to stop (v_safe = 0) regardless of the margin.
@@ -93,7 +101,6 @@ class CbfSafetyFilterNode(Node):
 
         # ── Logging parameters ──
         self.declare_parameter("log_enabled", True)
-        self.declare_parameter("log_directory", "~/cbf_logs")
 
         # ── Topic names (configurable via YAML) ──
         self.declare_parameter("topic_sub_mean_logdet", "cbf/mean_logdet")
@@ -126,6 +133,8 @@ class CbfSafetyFilterNode(Node):
         self.w_perp = self.get_parameter("cbf_w_perpendicular").value
         self.v_epsilon = self.get_parameter("cbf_v_epsilon").value
         self.p_T = self.get_parameter("cbf_p_T").value
+        self.v_safe_max = self.get_parameter("cbf_v_safe_max").value
+        self.acc_max = self.get_parameter("cbf_acc_max").value
 
         topic_sub_logdet = self.get_parameter("topic_sub_mean_logdet").value
         topic_sub_g = self.get_parameter("topic_sub_g").value
@@ -140,7 +149,6 @@ class CbfSafetyFilterNode(Node):
 
         # ── Logging setup ──
         self.log_enabled = self.get_parameter("log_enabled").value
-        log_dir_raw = self.get_parameter("log_directory").value
         self._log_file = None
         self._csv_writer = None
         self._drone_pos = [float('nan')] * 3      # latest ENU position
@@ -149,7 +157,7 @@ class CbfSafetyFilterNode(Node):
         self._tri_success = 0                      # latest triangulation successes
 
         if self.log_enabled:
-            log_dir = os.path.expanduser(log_dir_raw)
+            log_dir = getattr(self, '_flight_dir', os.path.expanduser('~/cbf_logs'))
             os.makedirs(log_dir, exist_ok=True)
             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_path = os.path.join(log_dir, f"cbf_log_{ts_str}.csv")
@@ -188,6 +196,7 @@ class CbfSafetyFilterNode(Node):
         self._cbf_timeout_sec = 2.0        # reset to None if no msg within this window
         self.v_nom_body = np.zeros(3)      # latest nominal velocity in body frame
         self.v_nom_angular = np.zeros(3)   # latest nominal angular velocity (pass-through)
+        self._last_v_nom_time = None       # timestamp of last cmd_vel_nom message
 
         # ── Plot data buffers (large safety cap, time-based trimming in plot) ──
         N = 2000  # safety cap to prevent unbounded memory growth
@@ -270,7 +279,7 @@ class CbfSafetyFilterNode(Node):
 
         # ── MAVROS drone position subscriber ──
         self.sub_drone_pos = self.create_subscription(
-            Odometry, '/mavros/global_position/local',
+            Odometry, '/ov_msckf/odomimu_enu',
             self._cb_drone_pos, qos,
             callback_group=self._data_group
         )
@@ -377,7 +386,7 @@ class CbfSafetyFilterNode(Node):
             cmd = (
                 'ros2 service call /mavros/set_message_interval '
                 'mavros_msgs/srv/MessageInterval '
-                '"{message_id: 33,  message_rate: 20.0}"'
+                '"{message_id: 33,  message_rate: 50.0}"'
             )
             subprocess.Popen(
                 cmd, shell=True,
@@ -446,8 +455,7 @@ class CbfSafetyFilterNode(Node):
 
     def _cb_cmd_vel_nom(self, msg: TwistStamped):
         """Receive nominal velocity command from guidance system (body frame)."""
-
-        self.get_logger().info('debugg', throttle_duration_sec=2.0)
+        self._last_v_nom_time = self.get_clock().now().nanoseconds * 1e-9
 
         self.v_nom_body = np.array([
             msg.twist.linear.x,
@@ -471,7 +479,7 @@ class CbfSafetyFilterNode(Node):
 
         # Pass-through: forward nominal to ArduPilot when CBF is not yet active
         if self.g_vec is None or self.mean_logdet is None:
-            self.get_logger().info('CBF not ready — passing through nominal velocity', throttle_duration_sec=2.0)
+            self.get_logger().info('CBF not ready — passing through nominal velocity', throttle_duration_sec=1.0)
             ap_msg = TwistStamped()
             ap_msg.header = msg.header
             ap_msg.header.frame_id = "base_link"
@@ -483,6 +491,11 @@ class CbfSafetyFilterNode(Node):
     # ──────────────────────────────────────────────────────────────────────
     def _run_cbf_filter(self):
         if self.mean_logdet is None or self.g_vec is None:
+            return
+        # Gate on fresh v_nom: don't publish if no cmd_vel_nom within timeout
+        now_check = self.get_clock().now().nanoseconds * 1e-9
+        if self._last_v_nom_time is None or (now_check - self._last_v_nom_time) > self._cbf_timeout_sec:
+            self.get_logger().info('v_nom stale or absent — not publishing v_safe', throttle_duration_sec=1.0)
             return
 
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -557,6 +570,24 @@ class CbfSafetyFilterNode(Node):
         # ── Output smoothing (EMA low-pass filter) ──
         if self._v_safe_prev is not None and self.output_alpha < 1.0:
             v_safe = self.output_alpha * v_safe + (1.0 - self.output_alpha) * self._v_safe_prev
+
+        # ── Acceleration limiter ──
+        now_acc = self.get_clock().now().nanoseconds * 1e-9
+        if self._v_safe_prev is not None and hasattr(self, '_last_cbf_time') and self._last_cbf_time is not None:
+            dt_cbf = now_acc - self._last_cbf_time
+            if dt_cbf > 0:
+                dv = v_safe - self._v_safe_prev
+                dv_norm = np.linalg.norm(dv)
+                max_dv = self.acc_max * dt_cbf
+                if dv_norm > max_dv:
+                    v_safe = self._v_safe_prev + dv * (max_dv / dv_norm)
+        self._last_cbf_time = now_acc
+
+        # ── Speed clamp ──
+        speed = np.linalg.norm(v_safe)
+        if speed > self.v_safe_max:
+            v_safe = v_safe * (self.v_safe_max / speed)
+
         self._v_safe_prev = v_safe.copy()
 
         # ── Publish v_safe as Vector3Stamped (internal monitoring) ──
@@ -620,7 +651,7 @@ class CbfSafetyFilterNode(Node):
             f"[CBF] h={h:.4f} | μ={margin:.4f} | δ_T={delta_T:.4f} | f={self.drift:.4f} | "
             f"g=[{self.g_vec[0]:.4f},{self.g_vec[1]:.4f},{self.g_vec[2]:.4f}] "
             f"| ||v_safe||={np.linalg.norm(v_safe):.4f} | {status}",
-            throttle_duration_sec=0.1,
+            throttle_duration_sec=0.5,
         )
 
 

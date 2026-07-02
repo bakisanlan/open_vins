@@ -53,11 +53,21 @@ def setup_style():
         "savefig.bbox": "tight",
     })
 
-def find_latest_log(log_dir: str = "~/cbf_logs") -> str:
-    log_dir = os.path.expanduser(log_dir)
-    files = sorted(glob.glob(os.path.join(log_dir, "cbf_log_*.csv")), key=os.path.getmtime)
+def find_latest_log(log_dir: str = None) -> str:
+    """Return the path to the most recently modified CBF CSV log.
+
+    Searches scripts/logs/flight_*/cbf_log_*.csv first,
+    then falls back to ~/cbf_logs/ for legacy logs.
+    """
+    files = []
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    flight_pattern = os.path.join(scripts_dir, "logs", "flight_*", "cbf_log_*.csv")
+    files += glob.glob(flight_pattern)
+    legacy_dir = os.path.expanduser(log_dir or "~/cbf_logs")
+    files += glob.glob(os.path.join(legacy_dir, "cbf_log_*.csv"))
+    files = sorted(files, key=os.path.getmtime)
     if not files:
-        print(f"No log files found in {log_dir}")
+        print(f"No CBF log files found in {flight_pattern} or {legacy_dir}")
         sys.exit(1)
     return files[-1]
 

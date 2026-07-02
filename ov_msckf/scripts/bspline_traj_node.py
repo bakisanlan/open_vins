@@ -32,6 +32,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import String
+from mavros_msgs.msg import State as MavrosState
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -273,6 +274,10 @@ class BSplineTrajectoryNode(Node):
     def __init__(self):
         super().__init__("bspline_traj")
 
+        # ── Flight file logger (mirrors all get_logger() output to traj.log) ──
+        from flight_logger import setup_flight_logger
+        setup_flight_logger(self, "traj.log")
+
         # ── Parameters ──
         self.declare_parameter("traj_enabled",      False)
         self.declare_parameter("traj_type",         "square")
@@ -284,7 +289,7 @@ class BSplineTrajectoryNode(Node):
         self.declare_parameter("rate",              20.0)    # Hz
         self.declare_parameter("hold_altitude",     True)    # no z correction
         self.declare_parameter("topic_pub_cmd_vel", "cmd_vel_nom")
-        self.declare_parameter("topic_sub_odom",    "odomimu")
+        self.declare_parameter("topic_sub_odom",    "odomimu_enu")
 
         self.enabled     = self.get_parameter("traj_enabled").value
         self.traj_type   = self.get_parameter("traj_type").value
@@ -314,6 +319,7 @@ class BSplineTrajectoryNode(Node):
         self.current_pos = None          # latest position (global frame)
         self.R_GtoI      = np.eye(3)     # rotation global → body
         self.t_start     = None          # wall-clock time of trajectory start
+        self.drone_mode  = ""            # current flight mode from MAVROS
 
         # ── QoS ──
         qos_be = QoSProfile(
@@ -323,6 +329,8 @@ class BSplineTrajectoryNode(Node):
         # ── Subscriber ──
         self.sub_odom = self.create_subscription(
             Odometry, topic_sub_odom, self._cb_odom, qos_be)
+        self.sub_mavros_state = self.create_subscription(
+            MavrosState, '/mavros/state', self._cb_mavros_state, 10)
 
         # ── Publishers ──
         self.pub_cmd = self.create_publisher(TwistStamped, topic_pub, 10)
@@ -351,9 +359,17 @@ class BSplineTrajectoryNode(Node):
         self.R_GtoI = rot.as_matrix().T          # R_ItoG → R_GtoI
 
     # ------------------------------------------------------------------
+    def _cb_mavros_state(self, msg: MavrosState):
+        """Track current flight mode from /mavros/state."""
+        prev = self.drone_mode
+        self.drone_mode = msg.mode
+        if prev != "GUIDED" and msg.mode == "GUIDED":
+            self.get_logger().info("Drone entered GUIDED mode – trajectory generation armed")
+
+    # ------------------------------------------------------------------
     def _timer_cb(self):
         """Evaluate trajectory and publish body-frame velocity command."""
-        if not self.enabled or self.current_pos is None:
+        if not self.enabled or self.current_pos is None or self.drone_mode != "GUIDED":
             return
 
         # Start clock on first enabled tick
@@ -412,7 +428,7 @@ class BSplineTrajectoryNode(Node):
         status_msg = String()
         status_msg.data = status
         self.pub_status.publish(status_msg)
-        self.get_logger().info(f"[BSpline] {status}", throttle_duration_sec=1.0)
+        self.get_logger().info(f"[BSpline] {status}", throttle_duration_sec=0.5)
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -53,6 +53,8 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
   PRINT_DEBUG("Publishing: %s\n", pub_fakegps_vision_cov->get_topic_name());
   pub_odomimu = node->create_publisher<nav_msgs::msg::Odometry>("odomimu", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_odomimu->get_topic_name());
+  pub_odomimu_enu = node->create_publisher<nav_msgs::msg::Odometry>("odomimu_enu", 2);
+  PRINT_DEBUG("Publishing: %s\n", pub_odomimu_enu->get_topic_name());
   pub_pathimu = node->create_publisher<nav_msgs::msg::Path>("pathimu", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_pathimu->get_topic_name());
 
@@ -1006,8 +1008,9 @@ void ROS2Visualizer::publish_state() {
   geometry_msgs::msg::PoseWithCovarianceStamped poseIinM;
   poseIinM.header.stamp = ROSVisualizerHelper::get_time_from_seconds(timestamp_inI);
   poseIinM.header.frame_id = "global";
-  // Get ENU position and rotation (R_GtoI)
+  // Get ENU position, rotation (R_GtoI), and velocity
   Eigen::Vector3d p_ENU = state->_imu->pos();
+  Eigen::Vector3d vel_ENU = state->_imu->vel();  // in OpenVINS global frame (arbitrary yaw)
   Eigen::Matrix3d R_GtoI_ENU = state->_imu->Rot();
   Eigen::Matrix3d R_ItoG_ENU = R_GtoI_ENU.transpose();
 
@@ -1055,6 +1058,9 @@ void ROS2Visualizer::publish_state() {
         prev_filter_position = p_ENU;
       }
       p_ENU = yaw_corrected_position;
+
+      // Correct velocity: rotate from OpenVINS arbitrary-yaw global frame to true ENU
+      vel_ENU = R_correction * vel_ENU;
     }
   }
 
@@ -1121,6 +1127,37 @@ void ROS2Visualizer::publish_state() {
   pose_enu.pose.orientation.z = q_GtoI_ENU(2);
   pose_enu.pose.orientation.w = q_GtoI_ENU(3);
   pub_fakegps_vision->publish(pose_enu);
+
+  // Publish yaw-corrected ENU odometry (full Odometry message with twist and covariance)
+  if (pub_odomimu_enu->get_subscription_count() != 0) {
+    nav_msgs::msg::Odometry odom_enu;
+    odom_enu.header.stamp = ROSVisualizerHelper::get_time_from_seconds(timestamp_inI);
+    odom_enu.header.frame_id = "map";
+
+    // Pose: yaw-corrected ENU position and orientation
+    odom_enu.pose.pose.position.x = p_ENU(0);
+    odom_enu.pose.pose.position.y = p_ENU(1);
+    odom_enu.pose.pose.position.z = p_ENU(2);
+    odom_enu.pose.pose.orientation.x = q_GtoI_ENU(0);
+    odom_enu.pose.pose.orientation.y = q_GtoI_ENU(1);
+    odom_enu.pose.pose.orientation.z = q_GtoI_ENU(2);
+    odom_enu.pose.pose.orientation.w = q_GtoI_ENU(3);
+
+    // Twist: velocity in IMU body frame (R_GtoI * v_inG)
+    odom_enu.child_frame_id = "imu";
+    Eigen::Vector3d vel_body = R_GtoI_ENU * vel_ENU;
+    odom_enu.twist.twist.linear.x = vel_body(0);
+    odom_enu.twist.twist.linear.y = vel_body(1);
+    odom_enu.twist.twist.linear.z = vel_body(2);
+
+    // Pose covariance (ENU frame, position then orientation)
+    for (int r = 0; r < 6; r++) {
+      for (int c = 0; c < 6; c++) {
+        odom_enu.pose.covariance[6 * r + c] = covariance_posori(r, c);
+      }
+    }
+    pub_odomimu_enu->publish(odom_enu);
+  }
 
   // Publish ENU pose with covariance to MAVROS vision_pose/pose_cov topic
   geometry_msgs::msg::PoseWithCovarianceStamped pose_enu_cov;

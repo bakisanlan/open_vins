@@ -1,0 +1,5 @@
+bspline traj node subscribe, odomimu odometry for global position and orientation to generate body frame velocity
+open vins uses R_c2a, R_b2c and body frame velocity for cbf calculation
+cbf filter node, subscribe  odomimu for global velocity(for norm) and orientation and body v_nom to generate body v_safe.
+cbf filter node subscribe mavros global_position/local to get ENU pos for plotting only
+

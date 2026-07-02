@@ -126,6 +126,7 @@ install(PROGRAMS
   scripts/bspline_traj_node.py
   scripts/keyboard_joy_node.py
   scripts/plot_cbf_log.py
+  scripts/flight_logger.py
   DESTINATION lib/${PROJECT_NAME})
 
 # finally define this as the package

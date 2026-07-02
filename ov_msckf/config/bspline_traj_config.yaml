@@ -59,4 +59,4 @@
 
     # Topics
     topic_pub_cmd_vel: "/ov_msckf/cmd_vel_nom"   # goes to CBF filter → ArduPilot
-    topic_sub_odom: "/ov_msckf/odomimu"           # OpenVINS odometry
+    topic_sub_odom: "/ov_msckf/odomimu_enu"           # OpenVINS odometry

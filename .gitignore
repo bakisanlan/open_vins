@@ -11,3 +11,4 @@ doc
 /install
 /log
 /ov_msckf/launch
+/ov_msckf/scripts/logs
